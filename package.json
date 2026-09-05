@@ -1,0 +1,58 @@
+{
+  "name": "ai-chat-overlay",
+  "version": "2.1.0",
+  "description": "Полупрозрачный чат с Mistral AI + OCR скриншотов (tesseract.js)",
+  "main": "main.js",
+  "scripts": {
+    "prestart": "npm run lint",
+    "start": "electron .",
+    "lint": "eslint main.js preload.js src app/js",
+    "build": "node scripts/build-renderer.js",
+    "build:renderer": "npm run build",
+    "package:ocr": "node scripts/package-ocr.js",
+    "test": "node --test tests/*.test.js",
+    "test:ocr": "electron scripts/test-ocr.js",
+    "test:e2e": "node --test tests/e2e.smoke.js",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "eslint": "^9.0.0",
+    "esbuild": "^0.24.0",
+    "playwright": "^1.48.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9",
+    "marked": "^18.0.11",
+    "tesseract.js": "^7.0.0"
+  },
+  "build": {
+    "appId": "com.neko.ai-chat-overlay",
+    "productName": "AI Chat Overlay",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**",
+      "app/**",
+      "!app/vendor/lang-data/**",
+      "config/**",
+      "tests/**",
+      "eslint.config.js",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": {
+      "provider": "github"
+    }
+  }
+}

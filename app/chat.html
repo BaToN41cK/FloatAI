@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data: https://tessdata.projectnaptha.com" />
+  <title>AI Чат</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { background: transparent; height: 100%; font-family: 'Segoe UI', sans-serif; }
+    .chat-container {
+      height: 100vh; display: flex; flex-direction: column;
+      background: linear-gradient(160deg, rgba(8,8,8,0.9), rgba(20,20,20,0.94));
+      border: 1px solid rgba(255,255,255,0.28); border-radius: 14px; overflow: hidden;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+    }
+    .chat-header {
+      padding: 8px 14px; background: rgba(255,255,255,0.07); -webkit-app-region: drag;
+      user-select: none; color: #e8e8e8;
+      display: flex; justify-content: space-between; align-items: center; font-size: 13px;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    }
+    .chat-header .btns button {
+      -webkit-app-region: no-drag; background: none; border: none; color: #a8a8a8;
+      font-size: 15px; cursor: pointer; margin-left: 8px;
+    }
+    .chat-header .btns button:hover { color: #fff; }
+    .chat-messages {
+      flex: 1; overflow-y: auto; padding: 12px 14px;
+      display: flex; flex-direction: column; gap: 8px; align-content: start; -webkit-app-region: no-drag;
+    }
+    .msg { max-width: 62%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.45; word-wrap: break-word; }
+    .msg.user { background: rgba(255,255,255,0.88); color: #111; border-bottom-right-radius: 3px; align-self: flex-end; }
+    .msg.assistant { background: rgba(38,38,38,0.95); color: #f0f0f0; border: 1px solid rgba(255,255,255,0.1); border-bottom-left-radius: 3px; align-self: flex-start; }
+    .msg.error { background: rgba(60,60,60,0.85); color: #eee; border: 1px solid rgba(255,255,255,0.25); align-self: center; max-width: 90%; }
+    .typing { color: #909090; font-style: italic; font-size: 12px; align-self: flex-start; max-width: 90%; }
+    .details { align-self: flex-start; max-width: 90%; }
+    .details > summary { color: #909090; font-style: italic; font-size: 12px; cursor: pointer; user-select: none; }
+    .details .ocr-text {
+      margin-top: 4px; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px; padding: 8px 10px; font-size: 12px; color: #d6d6d6; white-space: pre-wrap; word-break: break-word;
+    }
+    .msg.assistant .md { white-space: normal; }
+    .msg.assistant .md pre { background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; overflow-x: auto; font-size: 12px; margin: 6px 0; }
+    .msg.assistant .md code { background: rgba(0,0,0,0.45); border-radius: 4px; padding: 1px 4px; font-size: 12px; }
+    .msg.assistant .md pre code { background: none; padding: 0; }
+    .msg.assistant .md a { color: #fff; text-decoration: underline; }
+    .msg.assistant .md ul, .msg.assistant .md ol { padding-left: 20px; }
+    .chat-input { display: flex; gap: 8px; padding: 10px 12px; background: rgba(0,0,0,0.3); -webkit-app-region: no-drag; align-items: flex-end; }
+    .chat-input textarea {
+      flex: 1; resize: none; height: 46px; border: none; border-radius: 10px;
+      padding: 12px; font-size: 13px; background: rgba(255,255,255,0.1); color: #fff; outline: none;
+    }
+    .chat-input textarea:focus { background: rgba(255,255,255,0.16); outline: 1px solid rgba(255,255,255,0.5); }
+    .chat-input textarea::placeholder { color: rgba(220,220,220,0.45); }
+    .chat-input button { border: none; border-radius: 10px; width: 46px; height: 46px; cursor: pointer; background: #f2f2f2; color: #111; font-size: 17px; display: flex; align-items: center; justify-content: center; flex: none; }
+    .chat-input button:hover { filter: brightness(0.85); }
+    .chat-input button.recording { background: #e5484d; color: #fff; animation: micPulse 1.1s ease-in-out infinite; }
+    @keyframes micPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.55); }
+      50% { box-shadow: 0 0 0 7px rgba(229, 72, 77, 0); }
+    }
+    .chat-input button:disabled { opacity: 0.45; cursor: default; }
+    .status-bar { font-size: 11px; color: #909090; padding: 0 12px 8px; -webkit-app-region: no-drag; min-height: 14px; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; background: #6e6e6e; vertical-align: middle; }
+    .dot.ok { background: #4caf50; }
+    .dot.fail { background: #9a9a9a; }
+    .info-panel {
+      display: none; margin: 10px 14px 0; padding: 10px 12px; font-size: 12px; color: #e2e2e2;
+      background: rgba(30,30,30,0.95); border: 1px solid rgba(255,255,255,0.25); border-radius: 10px;
+      line-height: 1.7; -webkit-app-region: no-drag;
+    }
+    .info-panel.open { display: block; }
+    .info-panel b { color: #fff; }
+    .info-panel kbd {
+      background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.4); border-radius: 4px;
+      padding: 1px 5px; font-family: inherit; font-size: 11px; color: #fff;
+    }
+    .info-panel .close { float: right; cursor: pointer; color: #a0a0a0; }
+    .info-panel .close:hover { color: #fff; }
+    .info-panel .panel-btn {
+      background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.35);
+      border-radius: 6px; color: #fff; padding: 3px 10px; font-size: 12px; cursor: pointer;
+    }
+    .info-panel .panel-btn:hover { background: rgba(255,255,255,0.28); }
+    .sessions-list { margin-top: 8px; max-height: 180px; overflow-y: auto; }
+    .session-item {
+      display: flex; align-items: center; gap: 6px; padding: 5px 8px; margin-bottom: 4px;
+      background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.14); border-radius: 8px;
+      cursor: pointer; font-size: 12px;
+    }
+    .session-item:hover { background: rgba(255,255,255,0.1); }
+    .session-item.active { border-color: rgba(255,255,255,0.55); }
+    .session-item .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-item .del { color: #a07070; cursor: pointer; flex: none; }
+    .session-item .del:hover { color: #ff9090; }
+    .settings-form { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+    .settings-form label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #c8c8c8; }
+    .settings-form input[type="text"] {
+      background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.25); border-radius: 6px;
+      padding: 5px 8px; font-size: 12px; color: #fff; outline: none;
+    }
+    .settings-form input[type="text"]:focus { border-color: rgba(255,255,255,0.6); }
+    .settings-form .checkbox-row { flex-direction: row; align-items: center; gap: 6px; cursor: pointer; }
+    .drag-over { outline: 2px dashed rgba(255,255,255,0.65); }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.22); border-radius: 3px; }
+  </style>
+  <link rel="stylesheet" href="chat.css" />
+</head>
+<body>
+  <div class="loading-screen" id="loadingScreen"><div class="loading-mark">🐱</div><div>Неко загружается…</div></div>
+  <div class="chat-container" id="chatContainer">
+    <div class="chat-header">
+      <span><span class="dot" id="apiDot" title="Статус: зелёная — всё работает, красная — нет интернета/прокси"></span>🐱 Неко</span>
+      <span class="btns">
+        <button id="btnSessions" title="Диалоги">🗂</button>
+        <button id="btnSettings" title="Настройки (Ctrl+O)">⚙</button>
+        <button id="btnInfo" title="Информация и горячие клавиши">ⓘ</button>
+        <button id="btnClear" title="Очистить диалог">🗑</button>
+      </span>
+    </div>
+    <div class="chat-messages" id="messages"></div>
+    <div class="info-panel" id="infoPanel">
+      <span class="close" id="infoClose">✕</span>
+      <b>Горячие клавиши</b><br>
+      <kbd>\</kbd> — открыть/скрыть окно &nbsp;·&nbsp; <kbd>Ctrl+Shift+C</kbd> — то же<br>
+      <kbd>Ctrl+колесо</kbd> — прозрачность окна<br>
+      <kbd>Ctrl+O</kbd> — настройки<br>
+      <kbd>Enter</kbd> — отправить &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> — новая строка<br>
+      <kbd>Ctrl+Shift+S</kbd> — скриншот области → сразу в OCR<br>
+      <kbd>Ctrl+Shift+Q</kbd> — выход<br>
+      <span style="color:#8a86a8">Окно само прячется, если им не пользоваться 10 минут — вернуть по <kbd>\</kbd></span>
+    </div>
+    <div class="info-panel" id="sessionsPanel">
+      <span class="close" id="sessionsClose">✕</span>
+      <b>Диалоги</b>
+      <button id="btnNewSession" class="panel-btn" style="float:right">+ новый</button>
+      <div id="sessionsList" class="sessions-list"></div>
+    </div>
+    <div class="info-panel" id="settingsPanel">
+      <span class="close" id="settingsClose">✕</span>
+      <b>Настройки</b>
+      <div class="settings-layout">
+        <nav class="settings-nav" aria-label="Категории настроек">
+          <button class="settings-tab active" data-tab="general">Модель</button>
+          <button class="settings-tab" data-tab="personality" title="Персонализация агента">Персонализация</button>
+          <button class="settings-tab" data-tab="appearance">Тема</button>
+          <button class="settings-tab" data-tab="diagnostics">Диагностика</button>
+          <button class="settings-tab" data-tab="advanced">Прочее</button>
+        </nav>
+        <div class="settings-pages">
+        <div class="settings-page active" data-page="general">
+        <div class="settings-form">
+        <label>Провайдер
+          <select id="setProvider">
+            <option value="mistral">Mistral (free tier)</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="google">Google</option>
+            <option value="gigachat">GigaChat (free tier)</option>
+            <option value="yandex">YandexGPT / Алиса (free tier)</option>
+            <option value="custom">Свой OpenAI-совместимый</option>
+            <option value="ollama">Ollama (локально)</option>
+            <option value="lmstudio">LM Studio (локально)</option>
+            <option value="zai">Z.ai (есть free)</option>
+            <option value="cohere">Cohere (free trial)</option>
+            <option value="cerebras">Cerebras (free API)</option>
+            <option value="openrouter">OpenRouter (free и paid)</option>
+            <option value="auto">Auto (локально, без ключа)</option>
+          </select>
+        </label>
+        <label>Модель
+          <select id="setModel"></select>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="setDeepThink" /> Глубокое размышление (думает дольше)
+        </label>
+        <label>Язык интерфейса
+          <select id="setLanguage">
+            <option value="ru">Русский</option>
+            <option value="en">English</option>
+            <option value="zh">中文 (китайский)</option>
+            <option value="de">Deutsch (немецкий)</option>
+            <option value="es">Español (испанский)</option>
+            <option value="fr">Français (французский)</option>
+          </select>
+          <small class="field-hint">На каком языке показываются подписи и кнопки этого окна.</small>
+        </label>
+        <label>API-ключ выбранного провайдера
+          <input type="password" id="setApiKey" placeholder="Вставь ключ сюда" autocomplete="off" />
+          <small class="field-hint">Ключ даёт доступ, но не определяет модель. Модель выбирается отдельно.</small>
+        </label>
+        <label>Ключ Groq для распознавания речи (бесплатный)
+          <input type="password" id="setVoiceKey" placeholder="gsk_..." autocomplete="off" />
+          <small class="field-hint">Получи бесплатно на console.groq.com. Без ключа голос работает через Mistral Voxtral.</small>
+        </label>
+        </div>
+        </div>
+        <div class="settings-page" data-page="personality">
+        <div class="personality-editor">
+          <div class="personality-header">
+            <label class="personality-label" for="personalityEditor">Личность агента</label>
+            <span id="personalityCounter" class="personality-counter"></span>
+          </div>
+          <textarea id="personalityEditor" spellcheck="false"></textarea>
+          <small class="field-hint">Это системный prompt агента (всегда подключён к диалогу). Не добавляй API-ключи, пароли и другие секреты.</small>
+          <div class="personality-toolbar">
+            <button id="btnPersonalityReset" class="panel-btn">Сбросить</button>
+            <span id="personalityStatus" class="settings-status"></span>
+          </div>
+        </div>
+        </div>
+        <div class="settings-page" data-page="appearance">
+        <div class="settings-form">
+        <label>Прозрачность окна
+          <input type="range" id="setOpacity" min="25" max="100" value="100" />
+        </label>
+        <label>Тема
+          <select id="setTheme"><option value="dark">Тёмная</option><option value="light">Светлая</option></select>
+        </label>
+        <label>Размер шрифта
+          <input type="range" id="setFontSize" min="11" max="18" value="13" />
+        </label>
+        </div>
+        </div>
+        <div class="settings-page" data-page="diagnostics">
+        <div class="settings-form">
+        <label class="checkbox-row">
+          <input type="checkbox" id="setDebug" /> Расширенная диагностика
+        </label>
+        <button id="btnDiagnostics" class="panel-btn">Скопировать диагностику</button>
+        <button id="btnCheckProvider" class="panel-btn">Проверить провайдера</button>
+        <button id="btnCheckNet" class="panel-btn">Проверить интернет и прокси</button>
+        <button id="btnCheckVoice" class="panel-btn">Проверить голосовой ввод</button>
+        <div id="diagOut" class="field-hint" style="white-space:pre-wrap;grid-column:1/-1"></div>
+        </div>
+        </div>
+        <div class="settings-page" data-page="advanced">
+        <div class="settings-form">
+        <label>Прокси (нужен перезапуск)
+          <input type="text" id="setProxy" placeholder="socks5://127.0.0.1:10808 или http://127.0.0.1:10809" />
+          <small class="field-hint">Happ/v2rayN: socks5://127.0.0.1:10808 (порт SOCKS) или http://127.0.0.1:10809 (порт HTTP).</small>
+        </label>
+        <label>Адрес своего AI API (для своего провайдера)
+          <input type="text" id="setCustomEndpoint" placeholder="https://example.com/v1/chat/completions" />
+        </label>
+        <label>Чёрный список сайтов (через запятую)
+          <input type="text" id="setBlocked" placeholder="example.com,anothersite.org" />
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="setAutostart" /> Запускать при входе в Windows
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="setWebSearch" /> Плагин: поиск в интернете
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="setFetchPage" /> Плагин: чтение страниц
+        </label>
+        </div>
+        </div>
+        </div>
+        <div class="settings-actions">
+        <button id="btnSaveSettings" class="panel-btn save-settings">Сохранить</button>
+        <span id="settingsStatus" class="settings-status"></span>
+      </div>
+      </div>
+    </div>
+    <div class="chat-input">
+      <textarea id="input" placeholder="Спроси что-нибудь…"></textarea>
+      <button id="btnMic" title="Голосовое сообщение: речь → текст (можно отредактировать перед отправкой)">🎙</button>
+      <button id="btnSend" title="Отправить">➤</button>
+    </div>
+    <div class="status-bar"><span id="statusBar"></span><span id="tokenStatus" class="token-status"></span></div>
+  </div>
+  <script src="vendor/tesseract.min.js"></script>
+  <script src="vendor/marked.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
