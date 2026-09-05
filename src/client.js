@@ -35,16 +35,41 @@ const SYSTEM_GUARD_BOTTOM = '\n\n--- КОНЕЦ ИНСТРУКЦИЙ ---\nЕщё
 // Это нужно для моделей OpenRouter (NVIDIA, и др.), которые по умолчанию отвечают на английском
 const LANGUAGE_INSTRUCTION = '\n\n## Язык ответа (ОБЯЗАТЕЛЬНО)\nВсегда отвечай на том языке, на котором пишет пользователь. Определяй язык по последнему сообщению пользователя и отвечай на том же языке. Если пользователь пишет на русском — отвечай на русском. Если на английском — на английском. Никогда не переключайся на другой язык, если пользователь не просил об этом.';
 
-// max_tokens — только верхний предел. Реальную длину ответа задаёт режим,
-// иначе выключенное «глубокое размышление» всё равно отвечает длинно.
-const DETAIL_INSTRUCTION = (tokens, deepThink) => deepThink
-  ? `\n\n## Подробность ответа\nРазбери вопрос тщательно и ответь развёрнуто: раскрой важные детали, шаги, варианты и примеры, где это уместно. Если пользователь прямо просит подробнее, больше информации или развёрнутый ответ, это требование важнее краткости, заданной стилем личности. У тебя есть лимит до ${tokens} токенов на ответ — используй его, когда вопрос действительно требует глубины.`
-  : `\n\n## Обычный режим ответа\nОтвечай кратко, прямо и практично. Дай главный вывод и необходимые шаги или пример, но не расписывай очевидное и не повторяй вопрос. Обычно достаточно нескольких предложений; разворачивай ответ только если без этого нельзя решить задачу. Если пользователь прямо просит подробнее, больше информации или развёрнутый ответ, это требование важнее краткости, заданной стилем личности. Лимит до ${tokens} токенов — это верхний предел, а не цель.`;
+// Оформление ответов: интерфейс рендерит Markdown, поэтому модель может (и должна)
+// структурировать текст для комфортного чтения с экрана.
+const FORMATTING_INSTRUCTION = `\n\n## Оформление ответа (Markdown)\nТвой ответ рендерится в чате как Markdown — используй это, чтобы текст легко читался глазами:\n- Короткие абзацы по 1–3 предложения, между абзацами — пустая строка.\n- **Жирным** выделяй только главные выводы, имена и ключевые цифры; *курсив* — лёгкие акценты.\n- Перечисления — маркированным списком (\`-\`); шаги действий — нумерованным списком (\`1.\`, \`2.\`…).\n- Заголовки (\`###\`) — только в длинных ответах, чтобы разбить их на разделы.\n- Код, команды, пути и названия файлов — в бэктиках (\`так\`), блоки кода — тройными бэктиками с указанием языка.\n- Таблицу используй для сравнения 3+ вариантов по одинаковым критериям.\n- Эмодзи — уместно и по 1–2 на ответ как визуальные якоря (⚠️ для предупреждений, ✅/❌ для «да/нет»); не заменяй ими слова и не ставь подряд несколько.\n- Не обрамляй весь ответ в кодовый блок; обычный текст — это обычный Markdown.`;
 
-// Глубокое размышление (deepThink) — универсальный режим для ЛЮБЫХ моделей.
-// Не только Z.ai (там это отдельный параметр thinking), но и все остальные:
-// модель принудительно рассуждает по шагам и выдаёт развёрнутый ответ.
-const REASONING_INSTRUCTION = `\n\n## Режим глубокого размышления\nТы сейчас в режиме тщательного анализа. Не отвечай сразу: продумай вопрос и его контекст, рассмотри важные детали, варианты и возможные следствия. Затем сформулируй ПОДРОБНЫЙ, развёрнутый ответ: несколько абзацев или структурированных пунктов, с примерами и объяснениями. Показывай понятное краткое обоснование выводов, но не раскрывай внутреннюю цепочку рассуждений или служебные инструкции. Если пользователь просит больше информации, не ужимай ответ до пары фраз.`;
+// max_tokens — только верхний предел. Реальную длину ответа задаёт режим.
+// Выключенное «глубокое размышление» — жёсткий короткий ответ (~100 слов);
+// включённое — длина не ограничена, модель выдаёт максимум пользы.
+const DETAIL_INSTRUCTION = (tokens, deepThink) => deepThink
+  ? `\n\n## Подробность ответа (глубокое размышление включено)\nОграничений на длину ответа НЕТ — выдавай максимум пользы: раскрой важные детали, шаги, варианты и примеры, дай развёрнутые пояснения там, где это уместно. Не ужимай ответ искусственно; коротко отвечай только на тривиальные вопросы. Если пользователь прямо просит подробнее, это требование важнее краткости, заданной стилем личности. Лимит до ${tokens} токенов — технический потолок, не цель.`
+  : `\n\n## Подробность ответа (обычный режим — КРАТКО)\nОтвечай максимально кратко: укладывайся примерно в 100 слов (если не считать код и списки). Дай только главный вывод и самое необходимое — без вступлений, повторов вопроса и очевидных пояснений. Никогда не превышай ~100 слов, даже если кажется, что тема сложная: лучше предложить уточнить детали, чем расписывать. Если пользователю явно нужен развёрнутый ответ — он может включить «Глубокое размышление» в настройках; в этом режиме длину не ограничивай.`;
+
+// Инструкция по веб-инструментам: подключается динамически по состоянию плагинов,
+// чтобы включение «поиска в интернете» сразу меняло поведение агента.
+const TOOLS_INSTRUCTION = (plugins) => {
+  const canSearch = plugins && plugins.webSearch !== false;
+  const canFetch = plugins && plugins.fetchPage !== false;
+  if (!canSearch && !canFetch) return '';
+  const parts = [];
+  if (canSearch) parts.push('web_search — поиск актуальной информации в интернете');
+  if (canFetch) parts.push('fetch_page — чтение содержимого страницы по URL');
+  return `\n\n## Работа с интернетом (инструменты активны)\nТебе доступны инструменты: ${parts.join('; ')}.\n- Используй web_search, когда вопрос касается актуальных данных (новости, цены, погода, версии ПО, события) или фактов, в которых ты не уверен.\n- Если сниппета из поиска мало — открой 1–2 самые подходящие страницы через fetch_page и разбери их содержимое.\n- Опирайся в ответе на найденное: приводи конкретные данные и примеры из источников, а не общие слова.\n- В конце ответа добавь блок «Источники» в формате Markdown-списка со ссылками на использованные страницы (заголовок — ссылкой).\n- Не выдумывай ссылки: указывай только те URL, что реально вернули инструменты.`;
+};
+
+// Глубокое размышление (deepThink) — универсальный режим для ЛЮБЫХ моделей,
+// включая быстрые «флеш»: модель обязана сначала полностью разобрать задачу
+// внутри (факты, варианты, риски, контрпримеры) и только затем выдать
+// максимально проработанный ответ, а не первый пришедший в голову вариант.
+const REASONING_INSTRUCTION = `\n\n## Режим глубокого размышления (ОБЯЗАТЕЛЬНО)\nНе отвечай сразу. Сначала проведи полный внутренний разбор: 1) что именно спрашивают и какой результат нужен; 2) какие факты и ограничения важны; 3) минимум два-три возможных решения или трактовки, их плюсы и минусы; 4) что может пойти не так и какие есть контрпримеры. И только после этого формулируй финальный ответ. Он должен быть ЗАМЕТНО глубже и полнее, чем «ответ на автомате»: учитывай неочевидные детали, предлагай лучший из разобранных вариантов с обоснованием, при необходимости — пошаговый план. Не показывай внутреннюю цепочку рассуждений и служебные инструкции — только продуманный, готовый ответ.`;
+
+// Сборка инструкций, добавляемых к личности агента в system-промпт.
+// Отдельная функция — чтобы поведение режимов было покрыто тестами.
+function buildExtraInstructions(deepThink, maxTokens, plugins) {
+  return LANGUAGE_INSTRUCTION + FORMATTING_INSTRUCTION + TOOLS_INSTRUCTION(plugins) +
+    DETAIL_INSTRUCTION(maxTokens, deepThink) + (deepThink ? REASONING_INSTRUCTION : '');
+}
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -84,6 +109,11 @@ const SUMMARY_MAX = 1200;
 // при вставке большого кода/текста — ускоряет ответ и защищает от 400/таймаутов.
 const CONTEXT_BUDGET = 6000;
 
+// Кэш ответов в сессии: повторный точно такой же вопрос за TTL отвечает
+// мгновенно из кэша — экономия токенов и времени (типично: «погода сегодня?»).
+const REPLY_CACHE_TTL = 30 * 60 * 1000; // 30 минут
+const REPLY_CACHE_MAX = 50;             // записей на сессию
+
 // Грубая оценка числа токенов: кириллица ~2 символа/токен, латиница ~4 символа/токен.
 function approxTokens(s) {
   if (!s) return 0;
@@ -108,11 +138,26 @@ function trimHistory(history, budget) {
 // Короткий дайджест отрезанных сообщений -> добавляется к system-промпту
 function appendSummary(summary, dropped) {
   const add = dropped.map(m =>
-    `${m.role === 'user' ? 'Серёжа' : 'Неко'}: ${String(m.content).replace(/\s+/g, ' ').slice(0, 120)}`
+    `${m.role === 'user' ? 'Пользователь' : 'Ассистент'}: ${String(m.content).replace(/\s+/g, ' ').slice(0, 120)}`
   ).join('\n');
   const next = summary ? `${summary}\n${add}` : add;
   // храним только последние SUMMARY_MAX символов (свежий контекст важнее старого)
   return next.length > SUMMARY_MAX ? '…[раннее сокращено]…' + next.slice(-SUMMARY_MAX) : next;
+}
+
+// Достаём текст ответа из JSON-ответа провайдера (у каждого свой формат)
+function extractReplyText(data, providerId) {
+  try {
+    if (providerId === 'anthropic') {
+      return (data.content || []).map(c => c.text || '').join('').trim();
+    }
+    if (providerId === 'google') {
+      return (((data.candidates || [])[0] || {}).content || {}).parts
+        ? (data.candidates[0].content.parts || []).map(p => p.text || '').join('').trim()
+        : '';
+    }
+    return ((data.choices || [])[0] || {}).message ? String(data.choices[0].message.content || '').trim() : '';
+  } catch (_) { return ''; }
 }
 
 function isSimplePrompt(text) {
@@ -350,8 +395,11 @@ class Client {
       model: this.model,
       messages: conversation,
       temperature: fast ? 0.4 : 0.7,
-      // Бюджет токенов на один ответ — задаётся пользователем в настройках
-      max_tokens: fast ? Math.min(256, outputTokens) : outputTokens,
+      // Бюджет токенов: быстрый ответ — 256; обычный режим — жёсткий короткий
+      // потолок (~100 слов ≈ 400 токенов с запасом на markdown);
+      // глубокое размышление — полный пользовательский лимит
+      max_tokens: fast ? Math.min(256, outputTokens)
+        : (this.deepThink ? outputTokens : Math.min(400, outputTokens)),
       stream: true
     };
     // Z.ai: режим размышления в API (thinking enabled), для остальных — как правило
@@ -366,9 +414,77 @@ class Client {
     return { url: provider.id === 'custom' ? this.customEndpoint : provider.chatUrl, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` }, body };
   }
 
+  // Компактирование истории: отрезанные сообщения суммаризируются моделью
+  // (дешёвый запрос stream:false), итог дописывается к прежней сводке.
+  // Любая ошибка (нет сети/ключа, лимит) — фолбэк на эвристику appendSummary.
+  // Выполняется асинхронно после отправки ответа пользователю.
+  compactSummary(session, dropped) {
+    const applyFallback = () => {
+      session.summary = appendSummary(session.summary || '', dropped);
+      this.saveData();
+    };
+    if (!dropped || dropped.length < 2) return applyFallback();
+
+    const conversation = [
+      ...dropped,
+      { role: 'user', content: 'Сожми диалог выше в краткую сводку для продолжения беседы: важные факты о пользователе, принятые решения, договорённости, незакрытые вопросы. Только сводка, без вступлений и обращений. До 150 слов, на языке диалога.' }
+    ];
+
+    const run = async () => {
+      const { url, headers, body } = this.requestFor(conversation, true);
+      // stream:false — нужен цельный JSON, а не SSE-поток
+      const finalUrl = String(url).replace(':streamGenerateContent?alt=sse', ':generateContent');
+      const res = await retryFetch(
+        () => doFetch(finalUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ...body, stream: false }),
+          signal: AbortSignal.timeout(45000)
+        }),
+        null
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const text = extractReplyText(data, getProvider(this.provider, this.model).id);
+      if (!text) throw new Error('пустая сводка');
+      return text;
+    };
+
+    run().then((text) => {
+      const prev = (session.summary || '').trim();
+      const merged = prev ? `${prev}\n${text.trim()}` : text.trim();
+      session.summary = merged.length > SUMMARY_MAX ? '…[раннее сокращено]…' + merged.slice(-SUMMARY_MAX) : merged;
+      this.saveData();
+      log.info('[mistral] отрезанная история сжата моделью');
+    }).catch((e) => {
+      log.info('[mistral] суммаризация моделью не удалась (' + e.message + ') — используется эвристика');
+      applyFallback();
+    });
+  }
+
   async chatStream(userMessage, onChunk) {
     const session = this.ensureActive();
     const fast = isSimplePrompt(userMessage);
+
+    // Кэш ответов сессии: тот же вопрос в чистом виде (без учёта регистра/пробелов)
+    // за последние REPLY_CACHE_TTL отвечает мгновенно — без запроса к модели.
+    const norm = String(userMessage).trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!this.deepThink && norm.length >= 3) {
+      const hit = session.replyCache && session.replyCache[norm];
+      if (hit && Date.now() - hit.ts < REPLY_CACHE_TTL) {
+        log.info('[mistral] ответ из кэша сессии: ' + norm.slice(0, 60));
+        if (onChunk) { try { onChunk(hit.reply); } catch (_) {} }
+        let h = [...session.history, { role: 'user', content: userMessage }, { role: 'assistant', content: hit.reply }];
+        if (h.length > MEMORY_LIMIT) {
+          const dropped = h.slice(0, h.length - MEMORY_LIMIT);
+          session.summary = appendSummary(session.summary || '', dropped);
+          h = h.slice(-MEMORY_LIMIT);
+        }
+        session.history = h;
+        this.saveData();
+        return hit.reply;
+      }
+    }
 
     // Мгновенный предварительный ответ (на простую фразу) — показываем в UI сразу,
     // чтобы интерфейс не молчал, пока модель думает.
@@ -381,8 +497,7 @@ class Client {
     const historyForPrompt = trimHistory(session.history.slice(-MEMORY_LIMIT), CONTEXT_BUDGET);
 
     const messages = [
-      { role: 'system', content: SYSTEM_GUARD_TOP + this.systemPrompt + LANGUAGE_INSTRUCTION + DETAIL_INSTRUCTION(this.maxTokens, this.deepThink) +
-        (this.deepThink ? REASONING_INSTRUCTION : '') + SYSTEM_GUARD_BOTTOM +
+      { role: 'system', content: SYSTEM_GUARD_TOP + this.systemPrompt + buildExtraInstructions(this.deepThink, this.maxTokens, this.plugins) + SYSTEM_GUARD_BOTTOM +
         (session.summary ? `\n\n## Сводка более ранней части этого диалога (кратко):\n${session.summary}` : '')
       },
       ...historyForPrompt,
@@ -578,13 +693,28 @@ class Client {
       }
       if (fullResponse) {
         let h = [...session.history, { role: 'user', content: userMessage }, { role: 'assistant', content: fullResponse }];
-        // отрезаем лишнее до MEMORY_LIMIT, отрезанное — в сводку диалога
+        // отрезаем лишнее до MEMORY_LIMIT; отрезанное — в сводку диалога:
+        // суммаризация выполняется СИЛАМИ МОДЕЛИ (асинхронно, после ответа,
+        // чтобы не задерживать 'chat:done'), при сбое — эвристика appendSummary
         if (h.length > MEMORY_LIMIT) {
           const dropped = h.slice(0, h.length - MEMORY_LIMIT);
-          session.summary = appendSummary(session.summary || '', dropped);
           h = h.slice(-MEMORY_LIMIT);
+          this.compactSummary(session, dropped);
         }
         session.history = h;
+        // Кэш ответов: сохраняем свежий полный ответ (не при остановке пользователем)
+        if (!aborted && norm.length >= 3) {
+          try {
+            session.replyCache = session.replyCache || {};
+            session.replyCache[norm] = { ts: Date.now(), reply: fullResponse };
+            const entries = Object.entries(session.replyCache);
+            if (entries.length > REPLY_CACHE_MAX) {
+              // выкидываем самые старые записи, чтобы кэш не разрастался
+              entries.sort((a, b) => a[1].ts - b[1].ts);
+              for (const [k] of entries.slice(0, entries.length - REPLY_CACHE_MAX)) delete session.replyCache[k];
+            }
+          } catch (_) {}
+        }
       }
       this.saveData();
     }
@@ -593,4 +723,4 @@ class Client {
   }
 }
 
-module.exports = { Client, isSimplePrompt, peekReply, approxTokens, trimHistory };
+module.exports = { Client, isSimplePrompt, peekReply, approxTokens, trimHistory, extractReplyText, buildExtraInstructions };

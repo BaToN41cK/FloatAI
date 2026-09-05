@@ -7,7 +7,7 @@ const { approxTokens, trimHistory, peekReply } = require('../src/client');
 test('loadPersonality возвращает полный текст личности', () => {
   const full = loadPersonality();
   assert.ok(full.length > 20, 'личность должна содержать текст');
-  assert.match(full, /ассистент|Неко/i);
+  assert.match(full, /ассистент/i);
 });
 
 test('corePrompt читается один раз и содержит ВЕСЬ файл личности', () => {
@@ -18,9 +18,7 @@ test('corePrompt читается один раз и содержит ВЕСЬ �
   // Постоянная память: полная личность целиком, без выборки секций
   assert.equal(a, loadPersonality(), 'corePrompt = весь файл личности, всегда');
   assert.match(a, /ассистент|Характер и поведение/i);
-  if (/Неко/i.test(a)) {
-    assert.match(a, /Речевые фишки/);
-  }
+  assert.match(a, /Речевые фишки|Формат и принципы/i);
 });
 
 test('после reload corePrompt пересобирается корректно', () => {
@@ -28,7 +26,7 @@ test('после reload corePrompt пересобирается корректн
   reload(); // сбрасывает и кэш файла, и corePrompt
   const after = corePrompt();
   assert.ok(after.length > 0);
-  assert.match(after, /ассистент|Неко/i);
+  assert.match(after, /ассистент/i);
 });
 
 test('peekReply даёт мгновенный ответ на простые фразы', () => {

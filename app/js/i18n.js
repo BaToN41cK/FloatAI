@@ -1,5 +1,5 @@
 // Интерфейсные переводы: язык настроек/кнопок/подсказок.
-// Неко сама подстраивается под язык пользователя — это только UI.
+// Агент сам подстраивается под язык пользователя — это только UI.
 const T = {
   en: {
     'Модель': 'Model', 'Тема': 'Theme', 'Диагностика': 'Diagnostics', 'Прочее': 'Other',
@@ -7,7 +7,8 @@ const T = {
     'Провайдер': 'Provider', 'API-ключ выбранного провайдера': 'API key of the selected provider',
     'Токены на один ответ (max_tokens)': 'Tokens per reply (max_tokens)',
     'Язык интерфейса': 'Interface language',
-    'Ключ Groq для распознавания речи (бесплатный)': 'Groq key for speech recognition (free)',
+    'Поиск в интернете (выдача сайтов)': 'Web search (site results)',
+    'Ключ Brave Search API': 'Brave Search API key',
     'Прозрачность окна': 'Window opacity', 'Размер шрифта': 'Font size',
     'Прокси (нужен перезапуск)': 'Proxy (restart required)',
     'Адрес своего AI API (для своего провайдера)': 'Custom AI API endpoint (custom provider)',
@@ -24,7 +25,8 @@ const T = {
     'Сколько токенов модель может потратить на один ответ. Больше = длиннее и подробнее ответ.': 'How many tokens the model may spend on one reply. More = longer and more detailed.',
     'На каком языке показываются подписи и кнопки этого окна.': 'Language of labels and buttons in this window.',
     'Ключ даёт доступ, но не определяет модель. Модель выбирается отдельно.': 'The key grants access but does not pick the model. The model is chosen separately.',
-    'Получи бесплатно на console.groq.com. Без ключа голос работает через Mistral Voxtral.': 'Get it free at console.groq.com. Without it, voice uses Mistral Voxtral.',
+    'Auto: разбор выдачи без ключа. Brave: стабильный официальный API — вставь свой ключ ниже.': 'Auto: parses results without a key. Brave: stable official API — paste your key below.',
+    'Получи бесплатно на brave.com/search/api (2000 запросов/мес).': 'Get it free at brave.com/search/api (2000 requests/month).',
     'Happ/v2rayN: socks5://127.0.0.1:10808 (порт SOCKS) или http://127.0.0.1:10809 (порт HTTP).': 'Happ/v2rayN: socks5://127.0.0.1:10808 (SOCKS port) or http://127.0.0.1:10809 (HTTP port).',
     'Спроси что-нибудь…': 'Ask something…',
     'Голосовое сообщение: речь → текст (можно отредактировать перед отправкой)': 'Voice message: speech → text (editable before sending)',

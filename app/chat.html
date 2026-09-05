@@ -2,8 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data: https://tessdata.projectnaptha.com" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data: https://tessdata.projectnaptha.com" />
   <title>AI Чат</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -46,6 +45,30 @@
     .msg.assistant .md pre code { background: none; padding: 0; }
     .msg.assistant .md a { color: #fff; text-decoration: underline; }
     .msg.assistant .md ul, .msg.assistant .md ol { padding-left: 20px; }
+    .msg.assistant .md p { margin: 0 0 8px; }
+    .msg.assistant .md p:last-child { margin-bottom: 0; }
+    .msg.assistant .md h1, .msg.assistant .md h2, .msg.assistant .md h3, .msg.assistant .md h4 {
+      margin: 12px 0 6px; line-height: 1.25; font-weight: 700;
+    }
+    .msg.assistant .md h1 { font-size: 1.25em; }
+    .msg.assistant .md h2 { font-size: 1.15em; }
+    .msg.assistant .md h3, .msg.assistant .md h4 { font-size: 1.05em; }
+    .msg.assistant .md h1:first-child, .msg.assistant .md h2:first-child,
+    .msg.assistant .md h3:first-child, .msg.assistant .md h4:first-child { margin-top: 0; }
+    .msg.assistant .md li { margin: 2px 0; }
+    .msg.assistant .md li > p { margin: 0; }
+    .msg.assistant .md blockquote {
+      margin: 6px 0; padding: 4px 10px; border-left: 3px solid rgba(255,255,255,0.25);
+      color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.05); border-radius: 0 6px 6px 0;
+    }
+    .msg.assistant .md hr { border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 10px 0; }
+    .msg.assistant .md table { border-collapse: collapse; margin: 8px 0; font-size: 12px; width: 100%; }
+    .msg.assistant .md th, .msg.assistant .md td {
+      border: 1px solid rgba(255,255,255,0.18); padding: 4px 8px; text-align: left; word-break: break-word;
+    }
+    .msg.assistant .md th { background: rgba(255,255,255,0.08); font-weight: 700; }
+    .msg.assistant .md strong { font-weight: 700; }
+    .msg.assistant .md img { max-width: 100%; border-radius: 8px; }
     .chat-input { display: flex; gap: 8px; padding: 10px 12px; background: rgba(0,0,0,0.3); -webkit-app-region: no-drag; align-items: flex-end; }
     .chat-input textarea {
       flex: 1; resize: none; height: 46px; border: none; border-radius: 10px;
@@ -109,10 +132,10 @@
   <link rel="stylesheet" href="chat.css" />
 </head>
 <body>
-  <div class="loading-screen" id="loadingScreen"><div class="loading-mark">🐱</div><div>Неко загружается…</div></div>
+  <div class="loading-screen" id="loadingScreen"><div class="loading-mark">🐱</div><div>FloatAI загружается…</div></div>
   <div class="chat-container" id="chatContainer">
     <div class="chat-header">
-      <span><span class="dot" id="apiDot" title="Статус: зелёная — всё работает, красная — нет интернета/прокси"></span>🐱 Неко</span>
+      <span><span class="dot" id="apiDot" title="Статус: зелёная — всё работает, красная — нет интернета/прокси"></span>FloatAI</span>
       <span class="btns">
         <button id="btnSessions" title="Диалоги">🗂</button>
         <button id="btnSettings" title="Настройки (Ctrl+O)">⚙</button>
@@ -164,15 +187,22 @@
             <option value="ollama">Ollama (локально)</option>
             <option value="lmstudio">LM Studio (локально)</option>
             <option value="zai">Z.ai (есть free)</option>
-            <option value="cohere">Cohere (free trial)</option>
-            <option value="cerebras">Cerebras (free API)</option>
             <option value="openrouter">OpenRouter (free и paid)</option>
-            <option value="auto">Auto (локально, без ключа)</option>
+            <option value="auto">Auto (готово из коробки)</option>
           </select>
         </label>
         <label>Модель
           <select id="setModel"></select>
         </label>
+        <div id="ollamaSection" style="display:none; grid-column:1/-1; margin-top:4px">
+          <b style="font-size:12px">Локальные модели (Ollama)</b>
+          <div id="ollamaList" style="max-height:120px; overflow-y:auto; margin:6px 0; font-size:12px"></div>
+          <div style="display:flex; gap:6px">
+            <input type="text" id="ollamaModel" placeholder="имя модели, например qwen2.5:7b" style="flex:1; min-width:0" />
+            <button id="btnOllamaPull" class="panel-btn">Скачать</button>
+          </div>
+          <small id="ollamaStatus" class="field-hint"></small>
+        </div>
         <label class="checkbox-row">
           <input type="checkbox" id="setDeepThink" /> Глубокое размышление (думает дольше)
         </label>
@@ -191,9 +221,9 @@
           <input type="password" id="setApiKey" placeholder="Вставь ключ сюда" autocomplete="off" />
           <small class="field-hint">Ключ даёт доступ, но не определяет модель. Модель выбирается отдельно.</small>
         </label>
-        <label>Ключ Groq для распознавания речи (бесплатный)
-          <input type="password" id="setVoiceKey" placeholder="gsk_..." autocomplete="off" />
-          <small class="field-hint">Получи бесплатно на console.groq.com. Без ключа голос работает через Mistral Voxtral.</small>
+        <label>Ключ Brave Search API (необязательно)
+          <input type="password" id="setBraveKey" placeholder="BSA..." autocomplete="off" />
+          <small class="field-hint">Получи бесплатно на brave.com/search/api (2000 запросов/мес). С ключом — официальный API, без ключа — разбор HTML-выдачи.</small>
         </label>
         </div>
         </div>
@@ -256,6 +286,9 @@
         </label>
         <label class="checkbox-row">
           <input type="checkbox" id="setFetchPage" /> Плагин: чтение страниц
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="setVoiceEnabled" /> Голосовой ввод (микрофон 🎙 у поля ввода)
         </label>
         </div>
         </div>

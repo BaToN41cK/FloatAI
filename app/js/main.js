@@ -4,6 +4,7 @@ import { hasPendingImage, handleImageSend, initImageInputs, importScreenshot } f
 import { initVoice } from './voice.js';
 import { initSettings } from './settings.js';
 import { applyLang } from './i18n.js';
+import { store } from './store.js';
 
 function loadMessages() {
   const messages = document.getElementById('messages');
@@ -11,7 +12,7 @@ function loadMessages() {
   window.api.getHistory().then(history => {
     for (const m of history) addMsg(m.content, m.role === 'user' ? 'user' : 'assistant');
     // Приветствие при запуске отключено по запросу пользователя
-    window.__greeted = true;
+    store.state.greeted = true;
     $('input').focus();
   });
 }
@@ -38,17 +39,17 @@ window.api.onError((err) => {
 });
 window.api.onWebStatus(text => setStatus('🌐 ' + text));
 window.api.onScreenshot(png => { try { importScreenshot(png); } catch (e) { console.warn(e); } });
-// Мгновенный предварительный ответ (простой вопрос) — сразу вместо «печатает…»,
-// чтобы интерфейс не молчал, пока модель думает полный ответ.
+// Мгновенный предварительный ответ (простой вопрос) — подставляем в заглушку
+// текущего ответа («печатает…»). ВАЖНО: никогда не трогаем предыдущие сообщения
+// агента — раньше peek затирал первое сообщение в истории.
 window.api.onPeek((peek) => {
   if (!peek) return;
-  if (getStatus() === '🟡 Неко думает…') setStatus('');
-  const messages = document.getElementById('messages');
-  const el = messages.querySelector('.msg.assistant .md') || messages.querySelector('.msg.assistant');
-  if (el) { el.textContent = peek; el.classList.add('md'); }
+  if (getStatus() === '🟡 Думаю…') setStatus('');
+  const target = stream.peekTarget();
+  if (target) target.textContent = peek;
 });
 // Ответ начал приходить — снимаем статус «думает», чтобы не выглядело как зависание
-window.api.onFirstToken(() => { if (getStatus() === '🟡 Неко думает…') setStatus(''); });
+window.api.onFirstToken(() => { if (getStatus() === '🟡 Думаю…') setStatus(''); });
 window.api.onUpdateReady((info) => {
   setStatus(`обновление ${info.version} готово — установится при выходе (Ctrl+Shift+Q)`);
 });
@@ -64,7 +65,7 @@ async function send() {
   addMsg(text, 'user');
   stream.beginReply();
   stream.setStreaming(true);
-  setStatus('🟡 Неко думает…'); // честный статус до первого токена (снимеется via onFirstToken)
+  setStatus('🟡 Думаю…'); // честный статус до первого токена (снимеется via onFirstToken)
   window.api.sendChat(text);
 }
 $('btnSend').addEventListener('click', send);
@@ -135,6 +136,8 @@ window.addEventListener('keydown', (e) => {
 loadMessages();
 $('input').focus();
 window.api.getSettings().then(s => {
+  store.state.settings = s; // единое хранилище: настройки доступны всем модулям
+  store.state.voiceEnabled = !!s.voiceEnabled; // показать/спрятать 🎙
   applyTheme(s.theme);
   applyFontSize(s.fontSize);
   applyLang(s.language || 'ru'); // язык интерфейса (настройки/кнопки/подсказки)

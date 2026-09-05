@@ -11,9 +11,8 @@ export const MODEL_OPTIONS = {
   custom: ['custom-model', 'llama-3.3-70b', 'qwen2.5-72b-instruct', 'deepseek-chat', 'command-r-plus', 'mixtral-8x7b'],
   ollama: ['llama3.2', 'llama3.1', 'qwen2.5', 'deepseek-r1', 'mistral', 'phi4'],
   lmstudio: ['local-model', 'llama-3.2', 'qwen2.5', 'deepseek-r1', 'mistral-small', 'gemma-3'],
-  cohere: ['command-a-03-2025', 'command-r-plus-08-2024', 'command-r-08-2024', 'command-r7b-12-2024', 'command-r-03-2024'],
-  cerebras: ['gpt-oss-120b', 'qwen-3.8-27b'],
-  auto: ['qwen2.5:7b', 'llama3.1:8b', 'qwen2.5:3b', 'llama3.2:3b', 'deepseek-r1:8b'],
+  // Auto: выбор модели и ключа не нужен — работает из коробки (служебная Cohere)
+  auto: ['command-a-03-2025'],
   zai: ['GLM-5.3-Flash', 'GLM-5.3', 'GLM-5.2', 'GLM-5.1', 'GLM-5', 'GLM-4.7', 'GLM-4.7-FlashX', 'GLM-4.7-Flash', 'GLM-4.5-Flash', 'GLM-4.6V-Flash'],
   openrouter: [
     'nvidia/nemotron-3.5-lightning:free',
@@ -35,8 +34,8 @@ export const FREE_MODELS = new Set([
   'local-model', 'llama3.2', 'llama3.1', 'qwen2.5', 'deepseek-r1', 'mistral', 'phi4', 'llama-3.2', 'mistral-small', 'gemma-3',
   // Auto
   'qwen2.5:7b', 'llama3.1:8b', 'qwen2.5:3b', 'llama3.2:3b', 'deepseek-r1:8b',
-  // Cerebras
-  'gpt-oss-120b', 'qwen-3.8-27b',
+  // Auto (служебная облачная модель — ключ встроен, пользователю не нужен)
+  'command-a-03-2025',
   // OpenRouter бесплатные
   'nvidia/nemotron-3.5-lightning:free', 'poolside/laguna-s-2.1:free', 'inclusionai/ling-3.0-flash-fin:free'
 ]);

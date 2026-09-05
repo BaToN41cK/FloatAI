@@ -1,7 +1,7 @@
 {
-  "name": "ai-chat-overlay",
+  "name": "floatai",
   "version": "2.1.0",
-  "description": "Полупрозрачный чат с Mistral AI + OCR скриншотов (tesseract.js)",
+  "description": "Полупрозрачный плавающий чат с AI-агентом (Electron + AI-провайдеры + OCR + доступ в интернет)",
   "main": "main.js",
   "scripts": {
     "prestart": "npm run lint",
@@ -18,8 +18,8 @@
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8",
-    "eslint": "^9.0.0",
     "esbuild": "^0.24.0",
+    "eslint": "^9.0.0",
     "playwright": "^1.48.0"
   },
   "dependencies": {
@@ -28,7 +28,7 @@
     "tesseract.js": "^7.0.0"
   },
   "build": {
-    "appId": "com.neko.ai-chat-overlay",
+    "appId": "com.floatai.chat-overlay",
     "productName": "AI Chat Overlay",
     "directories": {
       "output": "dist"

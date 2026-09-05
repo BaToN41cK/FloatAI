@@ -37,6 +37,7 @@ const log = require('./src/logger');
 const { getDiagnostics } = require('./src/diagnostics');
 const { isNetworkError, isRateLimitError, friendlyError } = require('./src/ai-errors');
 const { Cooldown } = require('./src/cooldown');
+const secretKeys = require('./src/secret-keys');
 
 // --- Защита от EPIPE: если stdout/stderr — «мёртвая труба» (запуск через .vbs со
 // скрытым окном, закрытый терминал, редирект в файл от умершего процесса), любая
@@ -72,10 +73,11 @@ if (app.isPackaged) {
 }
 
 // --- Настройки из UI: применяем заблокированные сайты и TTL логов ---
-const { setBlockedSites } = require('./src/web-tools');
+const { setBlockedSites, setBraveApiKey } = require('./src/web-tools');
 const { getProvider } = require('./src/providers');
 const loaded = settings.load();
 setBlockedSites(loaded.blockedSites);
+setBraveApiKey(loaded.braveApiKey);
 log.setLogTtl(loaded.logTtlDays);
 
 // Поддержка прокси (обход сброса больших запросов провайдером):
@@ -247,14 +249,36 @@ app.whenReady().then(() => {
   });
 
   const runtimeSettings = settings.reload();
-  // Auto-фолбэк: если ключ не вписан и провайдер не локальный — переключаемся
-  // на локальную модель ~8B (Ollama), чтобы чат работал сразу и без интернета.
-  const noKey = !runtimeSettings.apiKey;
-  const providerCfg = getProvider(runtimeSettings.provider, runtimeSettings.model);
-  if (noKey && !providerCfg.local && runtimeSettings.provider !== 'custom') {
-    runtimeSettings.provider = 'auto';
-    runtimeSettings.model = 'qwen2.5:7b';
-    log.info('[ai] ключ не задан — включён Auto (локальная модель qwen2.5:7b через Ollama)');
+  // Auto: работает из коробки — всегда облачная Cohere command-a-03-2025 через
+  // служебный ключ (env / logs/secrets.json, вне репозитория). Модель и ключ
+  // пользователем не выбираются. Без служебного ключа — локальная ~8B (Ollama).
+  // Остальные провайдеры: своя модель + свой API-ключ (обязателен).
+  const resolveAuto = (s) => {
+    const key = secretKeys.cohere();
+    return key ? { provider: 'cohere', model: 'command-a-03-2025', apiKey: key, apiKeyFromUser: false } : null;
+  };
+  let autoMode = false; // работает ли сейчас служебный Auto-режим
+  if (runtimeSettings.provider === 'auto') {
+    autoMode = true;
+    const auto = resolveAuto(runtimeSettings);
+    if (auto) {
+      Object.assign(runtimeSettings, auto);
+      log.info('[ai] Auto: модель Cohere command-a-03-2025 (ключ вне репозитория)');
+    } else {
+      runtimeSettings.model = 'qwen2.5:7b';
+      log.info('[ai] служебный ключ недоступен — Auto работает локально (qwen2.5:7b через Ollama)');
+    }
+  } else {
+    const noKey = !runtimeSettings.apiKey;
+    const providerCfg = getProvider(runtimeSettings.provider, runtimeSettings.model);
+    if (noKey && !providerCfg.local && runtimeSettings.provider !== 'custom') {
+      autoMode = true;
+      runtimeSettings.provider = 'auto';
+      const auto = resolveAuto(runtimeSettings);
+      if (auto) Object.assign(runtimeSettings, auto);
+      else runtimeSettings.model = 'qwen2.5:7b';
+      log.info('[ai] ключ не задан — включён Auto');
+    }
   }
   mistral = new Client({ ...runtimeSettings, onWebStatus: text => {
     if (chatWindow) chatWindow.webContents.send('chat:web-status', text);
@@ -265,6 +289,7 @@ app.whenReady().then(() => {
     // Мгновенный предварительный ответ на простую фразу
     if (text && chatWindow) chatWindow.webContents.send('chat:peek', text);
   }, onToolPermission: async (name, args) => confirmAction('Разрешить инструмент?', `Модель хочет вызвать инструмент «${name}».\n\n${args.slice(0, 500)}`) });
+  mistral.apiKeyFromUser = !autoMode; // false, когда работает служебный ключ Auto-режима
   createChatWindow();
   chatWindow.show();
   chatWindow.focus();
@@ -328,8 +353,32 @@ async function deliverMessage(message) {
     return chunkSent;
   };
   try {
+    // Глубокое размышление: даём модели ~2 сек «подумать» до старта стрима,
+    // чтобы она не начинала писать с наскока и не переписывала начало ответа.
+    if (mistral.deepThink) await new Promise((r) => setTimeout(r, 2000));
     await run();
   } catch (err) {
+    // Auto-фолбэк цепочкой: Cohere (скрытый ключ) недоступен -> Cerebras
+    // (скрытый ключ) -> локальная модель. Сохранённые настройки не меняются.
+    const secretCerebras = mistral && !mistral.apiKeyFromUser && secretKeys.cerebras();
+    if (isNetworkError(err.message) && secretCerebras && mistral.provider === 'cohere') {
+      const previousProvider = mistral.provider;
+      const previousModel = mistral.model;
+      const previousKey = mistral.apiKey;
+      try {
+        if (chatWindow) chatWindow.webContents.send('chat:web-status', 'основной провайдер недоступен, пробую резервный…');
+        mistral.setModel('gpt-oss-120b', 'cerebras');
+        mistral.setApiKey(secretCerebras);
+        await run();
+        mistral.setModel(previousModel, previousProvider);
+        mistral.setApiKey(previousKey);
+        return;
+      } catch (fallbackError) {
+        mistral.setApiKey(previousKey);
+        mistral.setModel(previousModel, previousProvider);
+        log.warn('[chat] резервный провайдер тоже недоступен:', fallbackError.message);
+      }
+    }
     // Если облачный провайдер недоступен по сети, один раз пробуем локальную
     // модель, не меняя сохранённые настройки пользователя.
     if (isNetworkError(err.message) && mistral && !getProvider(mistral.provider, mistral.model).local) {
@@ -509,17 +558,36 @@ ipcMain.handle('personality:reset', () => {
 });
 ipcMain.handle('settings:set', (_e, partial) => {
   const saved = settings.save(partial || {});
+  const isAuto = saved.provider === 'auto';
   if ('model' in (partial || {}) || 'provider' in (partial || {})) {
-    mistral.setModel(saved.model, saved.provider);
+    if (isAuto) {
+      // Auto: модель и ключ не выбираются — служебная Cohere (или локальная без ключа)
+      const auto = secretKeys.cohere();
+      if (auto) {
+        mistral.setModel('command-a-03-2025', 'cohere');
+        mistral.setApiKey(auto);
+        mistral.apiKeyFromUser = false;
+      } else {
+        mistral.setModel('qwen2.5:7b', 'auto');
+      }
+    } else {
+      mistral.setModel(saved.model, saved.provider);
+    }
     rateLimitCooldowns.delete(saved.provider);
   }
   if ('deepThink' in (partial || {}) || 'language' in (partial || {})) {
     mistral.setOptions({ deepThink: saved.deepThink, language: saved.language });
   }
-  if ('apiKey' in (partial || {})) mistral.setApiKey(saved.apiKey);
+  if ('apiKey' in (partial || {}) && !isAuto) {
+    // Ключ запоминается per-провайдер: при переключении подставится сам
+    const perProviderKey = (saved.providerKeys && saved.providerKeys[saved.provider]) || saved.apiKey || '';
+    mistral.setApiKey(perProviderKey);
+    mistral.apiKeyFromUser = Boolean(perProviderKey);
+  }
   if ('plugins' in (partial || {})) mistral.setPlugins(saved.plugins);
   if ('customEndpoint' in (partial || {})) mistral.customEndpoint = saved.customEndpoint;
   if ('blockedSites' in (partial || {})) setBlockedSites(saved.blockedSites);
+  if ('braveApiKey' in (partial || {})) setBraveApiKey(saved.braveApiKey);
   if ('autostart' in (partial || {})) applyAutostart(saved.autostart);
   if ('logTtlDays' in (partial || {})) log.setLogTtl(saved.logTtlDays);
   if ('opacity' in (partial || {}) && chatWindow) {
@@ -555,13 +623,96 @@ async function checkConnectivity() {
 }
 ipcMain.handle('net:check', () => checkConnectivity());
 
+// Скачивание бинарного файла (модели распознавания и т.п.) через МАИН-процесс:
+// doFetch = net.fetch, который уважает прокси из настроек — в отличие от
+// обычного браузерного fetch в renderer (HuggingFace в РФ без прокси недоступен).
+ipcMain.handle('net:download', async (_e, url) => {
+  const res = await doFetch(String(url), { redirect: 'follow', signal: AbortSignal.timeout(120000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const buf = await res.arrayBuffer();
+  return Buffer.from(buf);
+});
+
+// --- Менеджер локальных моделей Ollama: список / скачивание / удаление ---
+const OLLAMA_BASE = 'http://127.0.0.1:11434';
+ipcMain.handle('ollama:list', async () => {
+  try {
+    const res = await doFetch(`${OLLAMA_BASE}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return { ok: true, models: (data.models || []).map(m => ({ name: m.name, size: m.size || 0 })) };
+  } catch (_) {
+    return { ok: false, error: 'Ollama не запущена (нужен http://127.0.0.1:11434)', models: [] };
+  }
+});
+ipcMain.on('ollama:pull', (_e, name) => {
+  const model = String(name || '').trim();
+  if (!model || !chatWindow) return;
+  (async () => {
+    try {
+      const res = await doFetch(`${OLLAMA_BASE}/api/pull`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model, stream: true }),
+        signal: AbortSignal.timeout(60 * 60 * 1000) // скачивание может быть долгим
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let j;
+          try { j = JSON.parse(line); } catch (_) { continue; }
+          if (j.error) throw new Error(j.error);
+          if (chatWindow) chatWindow.webContents.send('ollama:event', {
+            model,
+            status: j.status || '',
+            total: j.total || 0,
+            completed: j.completed || 0,
+            done: j.status === 'success' || !!j.done
+          });
+        }
+      }
+      if (chatWindow) chatWindow.webContents.send('ollama:event', { model, done: true, status: 'готово' });
+    } catch (e) {
+      if (chatWindow) chatWindow.webContents.send('ollama:event', { model, done: true, error: e.message });
+    }
+  })();
+});
+ipcMain.on('ollama:delete', async (_e, name) => {
+  const model = String(name || '').trim();
+  try {
+    await doFetch(`${OLLAMA_BASE}/api/delete`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model }),
+      signal: AbortSignal.timeout(10000)
+    });
+  } catch (_) {}
+  if (chatWindow) chatWindow.webContents.send('ollama:event', { model, done: true, deleted: true });
+});
+
 ipcMain.on('win:activity', resetIdleTimer);
+
+ipcMain.handle('voice:mode', () => {
+  const s = settings.load();
+  const cloud = Boolean(s.voiceApiKey || (mistral && mistral.apiKeyFromUser && mistral.provider === 'mistral'));
+  return cloud ? 'cloud' : 'local';
+});
 
 // --- Голос: аудиозапись из renderer -> Whisper (Groq, бесплатно) или Voxtral ---
 // Распознавание речи включается пользователем в настройках (speechEnabled).
 ipcMain.handle('voice:transcribe', async (_e, { b64, mime = 'audio/webm' } = {}) => {
   try {
     const s = settings.load();
+    if (!s.voiceEnabled) return { ok: false, error: 'Голосовой ввод выключен в настройках («Прочее»)' };
     if (!b64) throw new Error('Пустая аудиозапись');
     const audio = Buffer.from(String(b64), 'base64');
     if (!audio.length) throw new Error('Пустая аудиозапись');
@@ -585,14 +736,15 @@ ipcMain.handle('voice:transcribe', async (_e, { b64, mime = 'audio/webm' } = {})
       url = 'https://api.groq.com/openai/v1/audio/transcriptions';
       headers = { 'Authorization': `Bearer ${s.voiceApiKey}` };
       label = 'Whisper (Groq)';
-    } else if (mistral.apiKey) {
-      // Запасной путь: Voxtral от Mistral (если есть ключ Mistral)
+    } else if (mistral.apiKeyFromUser && mistral.provider === 'mistral') {
+      // Запасной путь: Voxtral от Mistral — только с НАСТОЯЩИМ ключом Mistral
+      // (служебный ключ Auto-режима (Cohere) для Voxtral не подходит — был 401)
       form.append('model', 'voxtral-mini-latest');
       url = 'https://api.mistral.ai/v1/audio/transcriptions';
       headers = { 'Authorization': `Bearer ${mistral.apiKey}` };
       label = 'Voxtral (Mistral)';
     } else {
-      return { ok: false, error: 'Нет ключа для распознавания речи. Вставь бесплатный Groq-ключ в настройках.' };
+      return { ok: false, error: 'Нужен ключ распознавания речи: GROQ_API_KEY (переменная окружения или logs/secrets.json) либо свой ключ Mistral с провайдером Mistral.' };
     }
 
     const res = await doFetch(url, { method: 'POST', headers, body: form });

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { PROVIDERS, providerForModel, getProvider, modelPricing } = require('../src/providers');
 const { isRateLimitError, isZaiOverload, friendlyError } = require('../src/ai-errors');
 const { Cooldown } = require('../src/cooldown');
+const { buildExtraInstructions } = require('../src/client');
 const { Client } = require('../src/client');
 
 test('определяет провайдера по модели', () => {
@@ -67,7 +68,7 @@ test('Cohere и Cerebras добавлены в каталог', () => {
 });
 
 test('формирует OpenAI-совместимый запрос с инструментами', () => {
-  const client = new Client({ provider: 'openai', model: 'gpt-4o-mini', apiKey: 'test-key' });
+  const client = new Client({ provider: 'openai', model: 'gpt-4o-mini', apiKey: 'test-key', deepThink: true });
   const request = client.requestFor([{ role: 'user', content: 'найди новости' }]);
   assert.equal(request.body.model, 'gpt-4o-mini');
   assert.equal(request.body.stream, true);
@@ -75,31 +76,58 @@ test('формирует OpenAI-совместимый запрос с инст�
   assert.ok(Array.isArray(request.body.tools));
 });
 
+test('обычный режим (без глубокого размышления) — короткий потолок ~100 слов', () => {
+  const client = new Client({ provider: 'openai', model: 'gpt-4o-mini', apiKey: 'test-key' });
+  const request = client.requestFor([{ role: 'user', content: 'что такое HTTP' }]);
+  assert.equal(request.body.max_tokens, 400, 'короткий потолок 400 токенов');
+  const instructions = buildExtraInstructions(false, 8192, { webSearch: false, fetchPage: false });
+  assert.match(instructions, /примерно в 100 слов/);
+  assert.doesNotMatch(instructions, /Ограничений на длину ответа НЕТ/);
+});
+
+test('глубокое размышление снимает ограничение длины', () => {
+  const client = new Client({ provider: 'openai', model: 'gpt-4o-mini', apiKey: 'test-key', deepThink: true });
+  const request = client.requestFor([{ role: 'user', content: 'расскажи подробно' }]);
+  assert.ok(request.body.max_tokens > 1000, 'полный лимит модели');
+  const instructions = buildExtraInstructions(true, 8192, { webSearch: false, fetchPage: false });
+  assert.match(instructions, /Ограничений на длину ответа НЕТ/);
+  assert.match(instructions, /Режим глубокого размышления/);
+});
+
 test('ограничивает вывод Mistral лимитом модели', () => {
-  const client = new Client({ provider: 'mistral', model: 'mistral-medium-latest', apiKey: 'test-key' });
+  const client = new Client({ provider: 'mistral', model: 'mistral-medium-latest', apiKey: 'test-key', deepThink: true });
   const request = client.requestFor([{ role: 'user', content: 'расскажи обо мне' }]);
   assert.equal(request.body.max_tokens, 8192);
 });
 
 test('ограничивает вывод Cohere лимитом модели', () => {
-  const client = new Client({ provider: 'cohere', model: 'command-a-03-2025', apiKey: 'test-key' });
+  const client = new Client({ provider: 'cohere', model: 'command-a-03-2025', apiKey: 'test-key', deepThink: true });
   const request = client.requestFor([{ role: 'user', content: 'расскажи обо мне' }]);
   assert.equal(request.body.max_tokens, 8192);
 });
 
+test('включённый поиск добавляет инструкцию про источники, выключенный — нет', () => {
+  const withWeb = buildExtraInstructions(false, 8192, { webSearch: true, fetchPage: true });
+  assert.match(withWeb, /Источники/);
+  assert.match(withWeb, /web_search/);
+  const noWeb = buildExtraInstructions(false, 8192, { webSearch: false, fetchPage: false });
+  assert.doesNotMatch(noWeb, /Источники/);
+  assert.doesNotMatch(noWeb, /web_search/);
+});
+
 test('формирует Anthropic и Google payload без OpenAI-полей', () => {
   const conversation = [{ role: 'system', content: 'Ты помощник' }, { role: 'user', content: 'Привет' }];
-  const anthropic = new Client({ provider: 'anthropic', model: 'claude-3-5-haiku-latest', apiKey: 'test-key' }).requestFor(conversation);
+  const anthropic = new Client({ provider: 'anthropic', model: 'claude-3-5-haiku-latest', apiKey: 'test-key', deepThink: true }).requestFor(conversation);
   assert.equal(anthropic.body.system, 'Ты помощник');
   assert.ok(anthropic.body.max_tokens > 1000);
   assert.equal(anthropic.body.messages[0].role, 'user');
-  const google = new Client({ provider: 'google', model: 'gemini-2.5-flash', apiKey: 'test-key' }).requestFor(conversation);
+  const google = new Client({ provider: 'google', model: 'gemini-2.5-flash', apiKey: 'test-key', deepThink: true }).requestFor(conversation);
   assert.ok(google.body.contents[0].parts[0].text);
   assert.ok(google.body.generationConfig.maxOutputTokens > 1000);
 });
 
 test('ограничивает вывод Anthropic лимитом модели', () => {
-  const client = new Client({ provider: 'anthropic', model: 'claude-3-5-haiku-latest', apiKey: 'test-key' });
+  const client = new Client({ provider: 'anthropic', model: 'claude-3-5-haiku-latest', apiKey: 'test-key', deepThink: true });
   const request = client.requestFor([{ role: 'user', content: 'расскажи подробно' }]);
   assert.equal(request.body.max_tokens, 8192);
 });

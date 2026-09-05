@@ -1,4 +1,4 @@
-// Веб-инструменты для Неко: поиск (Brave Search) и чтение страниц.
+// Веб-инструменты: поиск (Brave Search) и чтение страниц.
 // Весь трафик идёт через doFetch (в Electron — net.fetch, уважает прокси из настроек).
 const dns = require('dns').promises;
 const log = require('./logger');
@@ -120,15 +120,60 @@ function isBlockedSite(urlStr) {
   return BLOCKED_SITES.some(b => h === b || h.endsWith('.' + b));
 }
 
-// Поиск: Brave Search (парсим HTML-выдачу без API-ключа; DDG/Bing закрылись anti-bot)
-async function webSearch(query) {
-  const key = String(query).trim().toLowerCase();
-  const cached = searchCache.get(key);
-  if (cached && Date.now() - cached.ts < SEARCH_TTL) {
-    log.info('[web] поиск из кэша: ' + query);
-    return cached.result;
+// Поиск: официальный Brave Search API (если задан ключ) — стабильный JSON
+// вместо хрупкого парсинга HTML-выдачи. Бесплатный тариф: 2000 запросов/мес,
+// ключ: https://brave.com/search/api/. Без ключа — резервный парсинг HTML.
+let BRAVE_API_KEY = '';
+function setBraveApiKey(key) {
+  BRAVE_API_KEY = String(key || '').trim();
+  if (BRAVE_API_KEY) log.info('[web] ключ Brave Search API задан — используется официальный API');
+}
+
+// Общая финализация: SSRF-фильтр результатов + формат ответа + кэш
+async function finalizeSearch(query, rawResults) {
+  const results = [];
+  // Параллельная SSRF-проверка: DNS-резолв результата по одному был бы медленным.
+  const safetyFlags = await Promise.all(rawResults.map((r) => isSafeUrl(r.url)));
+  for (let i = 0; i < rawResults.length && results.length < MAX_SNIPPETS; i++) {
+    if (safetyFlags[i]) results.push(rawResults[i]);
   }
 
+  if (!results.length) return `По запросу «${query}» ничего не найдено (или поиск не отдал результаты).`;
+  log.info(`[web] поиск «${query}»: ${results.length} результатов (Brave)`);
+  const answer = 'Результаты поиска:\n' + results.map((r, n) =>
+    `${n + 1}. ${r.title}\n   URL: ${r.url}\n   ${r.snippet || '(без описания)'}`
+  ).join('\n');
+  searchCache.set(String(query).trim().toLowerCase(), { ts: Date.now(), result: answer });
+  // ограничиваем кэш линейным проходом (без сортировки на каждый промах)
+  if (searchCache.size > SEARCH_CACHE_MAX) {
+    let oldestKey = null, oldestTs = Infinity;
+    for (const [k, v] of searchCache) {
+      if (v.ts < oldestTs) { oldestTs = v.ts; oldestKey = k; }
+    }
+    if (oldestKey) searchCache.delete(oldestKey);
+  }
+  return answer;
+}
+
+// Официальный Brave Search API: JSON, предсказуемая структура
+async function braveApiSearch(query) {
+  const q = encodeURIComponent(String(query).slice(0, 400));
+  const res = await doFetch(`https://api.search.brave.com/res/v1/web/search?q=${q}&count=${MAX_SNIPPETS}`, {
+    headers: { 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'X-Subscription-Token': BRAVE_API_KEY },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT)
+  });
+  if (!res.ok) throw new Error(`Brave Search API недоступен (HTTP ${res.status})`);
+  const data = await res.json();
+  const items = (data.web && Array.isArray(data.web.results)) ? data.web.results : [];
+  return items.slice(0, MAX_SNIPPETS * 2).map(r => ({
+    title: stripTags(r.title || ''),
+    url: String(r.url || ''),
+    snippet: stripTags(r.description || '').slice(0, 300)
+  })).filter(r => r.title && r.url);
+}
+
+// Резервный путь: парсинг HTML-выдачи без ключа
+async function braveHtmlSearch(query) {
   const q = encodeURIComponent(String(query).slice(0, 300));
   const res = await doFetch('https://search.brave.com/search?q=' + q, {
     headers: { 'User-Agent': UA, 'Accept-Language': 'ru,en;q=0.8' },
@@ -137,11 +182,9 @@ async function webSearch(query) {
   if (!res.ok) throw new Error(`поиск недоступен (HTTP ${res.status})`);
   const html = await res.text();
 
-  const results = [];
-  // Веб-результаты Brave: блоки class="result-content ..." со ссылкой и заголовком внутри.
-  // Сначала собираем кандидатов БЕЗ DNS-проверок, чтобы все isSafeUrl выполнить параллельно.
-  const chunks = html.split(/class="result-content[ "]/).slice(1);
   const rawResults = [];
+  // Веб-результаты Brave: блоки class="result-content ..." со ссылкой и заголовком внутри.
+  const chunks = html.split(/class="result-content[ "]/).slice(1);
   for (const chunk of chunks) {
     if (rawResults.length >= MAX_SNIPPETS * 3) break;
     const linkMatch = chunk.match(/<a[^>]+href="(https?:\/\/[^"]+)"/);
@@ -154,28 +197,28 @@ async function webSearch(query) {
     const snipMatch = chunk.match(/clamp-dynamic[^>]*>([\s\S]*?)<\/div>/);
     rawResults.push({ title, url, snippet: snipMatch ? stripTags(snipMatch[1]).slice(0, 300) : '' });
   }
+  return rawResults;
+}
 
-  // Параллельная SSRF-проверка: DNS-резолв результата по одному был бы медленным.
-  const safetyFlags = await Promise.all(rawResults.map((r) => isSafeUrl(r.url)));
-  for (let i = 0; i < rawResults.length && results.length < MAX_SNIPPETS; i++) {
-    if (safetyFlags[i]) results.push(rawResults[i]);
+async function webSearch(query) {
+  const key = String(query).trim().toLowerCase();
+  const cached = searchCache.get(key);
+  if (cached && Date.now() - cached.ts < SEARCH_TTL) {
+    log.info('[web] поиск из кэша: ' + query);
+    return cached.result;
   }
 
-  if (!results.length) return `По запросу «${query}» ничего не найдено (или поиск не отдал результаты).`;
-  log.info(`[web] поиск «${query}»: ${results.length} результатов (Brave)`);
-  const answer = 'Результаты поиска:\n' + results.map((r, n) =>
-    `${n + 1}. ${r.title}\n   URL: ${r.url}\n   ${r.snippet || '(без описания)'}`
-  ).join('\n');
-  searchCache.set(key, { ts: Date.now(), result: answer });
-  // ограничиваем кэш линейным проходом (без сортировки на каждый промах)
-  if (searchCache.size > SEARCH_CACHE_MAX) {
-    let oldestKey = null, oldestTs = Infinity;
-    for (const [k, v] of searchCache) {
-      if (v.ts < oldestTs) { oldestTs = v.ts; oldestKey = k; }
+  let rawResults;
+  if (BRAVE_API_KEY) {
+    try {
+      rawResults = await braveApiSearch(query);
+    } catch (e) {
+      log.warn('[web] Brave API не сработал (' + e.message + ') — пробую HTML-выдачу');
+      rawResults = null;
     }
-    if (oldestKey) searchCache.delete(oldestKey);
   }
-  return answer;
+  if (!rawResults) rawResults = await braveHtmlSearch(query);
+  return finalizeSearch(query, rawResults);
 }
 
 // Чтение страницы: убираем скрипты/стили/теги, оставляем текст.
@@ -237,4 +280,4 @@ async function fetchPage(url) {
   return prefix + text.slice(0, PAGE_LIMIT) + (text.length > PAGE_LIMIT ? '\n…[текст обрезан]' : '');
 }
 
-module.exports = { webSearch, fetchPage, setBlockedSites };
+module.exports = { webSearch, fetchPage, setBlockedSites, setBraveApiKey };

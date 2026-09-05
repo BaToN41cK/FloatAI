@@ -1,5 +1,7 @@
 // UI-хелперы и состояние стриминга (общие для всех модулей renderer).
 // Никакой специфики фич — только базовая работа с DOM и markdown.
+// Состояние (статус, стриминг) живёт в store — единый источник правды.
+import { store } from './store.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -20,7 +22,7 @@ export function renderMarkdown(el, text) {
 
 export function scrollDown() { messages.scrollTop = messages.scrollHeight; }
 
-export function setStatus(text) { statusBar.textContent = text || ''; }
+export function setStatus(text) { store.state.status = text || ''; statusBar.textContent = text || ''; }
 export function getStatus() { return statusBar.textContent; }
 
 export function setApiDot(state) {
@@ -72,22 +74,28 @@ export function applyFontSize(size) {
 
 export function greetingText() {
   const h = new Date().getHours();
-  if (h >= 5 && h < 12) return 'Доброе утро, Серёжа! ☀️ Чем могу помочь?';
-  if (h >= 12 && h < 18) return 'Добрый день, Серёжа! Чем займёмся?';
-  if (h >= 18 && h < 23) return 'Добрый вечер, Серёжа! Чем помочь?';
-  return 'Не спится, Серёжа? Могу составить компанию 🐾';
+  if (h >= 5 && h < 12) return 'Доброе утро! ☀️ Чем могу помочь?';
+  if (h >= 12 && h < 18) return 'Добрый день! Чем займёмся?';
+  if (h >= 18 && h < 23) return 'Добрый вечер! Чем помочь?';
+  return 'Не спится? Могу составить компанию 🐾';
 }
 
 // --- Состояние стриминга: markdown пересобираем не на каждый токен, а раз в кадр ---
-let streaming = false;
-let activeReplyDiv = null;   // текущий ответ Неко
+let activeReplyDiv = null;   // текущий ответ агента
 let activeRawMd = '';        // сырой markdown текущего ответа
 let renderFrame = 0;         // id requestAnimationFrame для троттлинга
 let streamMd = null;         // элемент, ждущий отрисовки
 
 export const stream = {
-  isStreaming() { return streaming; },
-  setStreaming(on) { streaming = on; $('btnSend').disabled = on; scrollDown(); },
+  isStreaming() { return store.state.streaming; },
+  setStreaming(on) { store.state.streaming = !!on; $('btnSend').disabled = !!on; scrollDown(); },
+  // Цель для мгновенного peek-ответа: ТОЛЬКО заглушка текущего ответа («печатает…»),
+  // пока в неё не пришёл ни один реальный токен. Старые сообщения агента
+  // никогда не перезаписываются (раньше peek затирал первое сообщение в DOM).
+  peekTarget() {
+    if (!activeReplyDiv || activeRawMd) return null;
+    return activeReplyDiv.querySelector('.md') || activeReplyDiv;
+  },
   // Начало нового ответа: создаём блок-заглушку
   beginReply() { activeRawMd = ''; activeReplyDiv = addMsg('печатает…', 'assistant'); return activeReplyDiv; },
   appendChunk(chunk) {

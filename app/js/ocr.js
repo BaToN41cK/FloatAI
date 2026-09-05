@@ -1,7 +1,9 @@
 // OCR скриншотов через локальный Tesseract (vendor/, без CDN).
 // Изображение не покидает ПК — модели уходит только распознанный текст.
+// Прогресс показывается в статус-баре, Esc во время распознавания отменяет операцию.
 import { $, addMsg, setStatus, addOcrDetails } from './ui.js';
 import { stream } from './ui.js';
+import { store } from './store.js';
 
 export const MAX_IMAGE_MB = 10;
 // Большие кадры (особенно скриншоты области в полном DPI-разрешении) тормозят
@@ -48,18 +50,26 @@ function prepareOcrImage(dataUrl, mime, angle = 0, binary = false) {
 }
 
 async function recognizeBestOcr(dataUrl) {
+  ocrCancelled = false;
+  const worker = await getOcrWorker();
   const angles = [0, 90, 180, 270];
   let best = { text: '', confidence: 0, angle: 0 };
   for (const angle of angles) {
+    checkOcrCancelled();
     const image = await prepareOcrImage(dataUrl, 'png', angle);
-    const result = await Tesseract.recognize(image.dataUrl, 'rus+eng', TESSERACT_OPTIONS);
+    checkOcrCancelled();
+    const result = await worker.recognize(image.dataUrl);
+    checkOcrCancelled();
     const candidate = { text: (result.data.text || '').trim(), confidence: result.data.confidence || 0, angle };
     if (candidate.confidence > best.confidence || (!best.text && candidate.text)) best = candidate;
     if (best.confidence >= 75) break;
   }
   if (best.confidence < 70) {
+    checkOcrCancelled();
     const image = await prepareOcrImage(dataUrl, 'png', best.angle, true);
-    const result = await Tesseract.recognize(image.dataUrl, 'rus+eng', TESSERACT_OPTIONS);
+    checkOcrCancelled();
+    const result = await worker.recognize(image.dataUrl);
+    checkOcrCancelled();
     if ((result.data.confidence || 0) > best.confidence) {
       best = { text: (result.data.text || '').trim(), confidence: result.data.confidence || 0, angle: best.angle };
     }
@@ -75,23 +85,57 @@ const TESSERACT_OPTIONS = {
   corePath: new URL('core/', VENDOR_URL).href,
   langPath: new URL('lang-data/', VENDOR_URL).href,
   workerBlobURL: false,
-  logger: () => {} // отключаем спам в консоль
+  // Прогресс распознавания: показываем в статус-баре (иначе OCR выглядит зависанием)
+  logger: (m) => {
+    if (m && m.status === 'recognizing text') {
+      const pct = Math.round((m.progress || 0) * 100);
+      setStatus(`OCR распознаёт текст… ${pct}%`);
+    }
+  }
 };
 
-let pendingImage = null;       // прикреплённое изображение { base64, mime }
+// Живой worker Tesseract: создаётся один раз и переиспользуется между углами,
+// а при отмене (Esc) — терминируется. Нужен вместо Tesseract.recognize, потому
+// что у последнего нет способа прервать распознавание.
+let ocrWorker = null;
+let ocrCancelled = false;
+let ocrRunning = false;   // идёт ли прямо сейчас распознавание (для Esc)
+
+async function getOcrWorker() {
+  if (!ocrWorker) ocrWorker = await Tesseract.createWorker('rus+eng', 1, TESSERACT_OPTIONS);
+  return ocrWorker;
+}
+
+// Отмена распознавания (Esc в процессе OCR). Сообщение об отмене покажет
+// handleImageSend через catch — здесь только глушим worker и статус.
+export function cancelOcr() {
+  if (!ocrWorker && !ocrCancelled) return;
+  ocrCancelled = true;
+  if (ocrWorker) {
+    try { ocrWorker.terminate(); } catch (_) {}
+    ocrWorker = null;
+  }
+  setStatus('');
+}
+
+function checkOcrCancelled() {
+  if (ocrCancelled) throw new Error('OCR отменена пользователем');
+}
+
+let pendingImage = null;       // прикреплённое изображение { base64, mime } (дублируется в store)
 let pendingPreviewDiv = null;  // превью-строка в чате
 
-export function hasPendingImage() { return !!pendingImage; }
-export function getPendingImage() { return pendingImage; }
+export function hasPendingImage() { return !!store.state.pendingImage; }
+export function getPendingImage() { return store.state.pendingImage; }
 
 function clearImage() {
-  pendingImage = null;
+  store.state.pendingImage = null;
   if (pendingPreviewDiv) pendingPreviewDiv.remove();
   pendingPreviewDiv = null;
 }
 
 function setPendingImage(img) {
-  pendingImage = img;
+  store.state.pendingImage = img;
   if (pendingPreviewDiv) pendingPreviewDiv.remove();
   pendingPreviewDiv = null;
   if (img) {
@@ -125,12 +169,13 @@ function handlePaste(e) {
 // Отправка сообщения с изображением: OCR -> текст -> модель.
 // Вызывается из main.js из общего send(), когда прикреплена картинка.
 export async function handleImageSend(text) {
-  const img = pendingImage;
+  const img = store.state.pendingImage;
   clearImage();
   $('input').value = '';
   addMsg(text ? `📷 ${text}` : '📷 Что на скриншоте?', 'user');
   setStatus('подготавливаю скриншот…');
   stream.setStreaming(true);
+  ocrRunning = true;
   try {
     let dataUrl = `data:image/${img.mime};base64,${img.base64}`;
     setStatus('OCR распознаёт текст…');
@@ -145,7 +190,7 @@ export async function handleImageSend(text) {
       return;
     }
 
-    setStatus('текст прочитан, Неко думает…');
+    setStatus('текст прочитан, думаю…');
     if (!(await window.api.confirmSensitive(ocr.text))) {
       setStatus('');
       addMsg('📷 Отправка отменена: в распознанном тексте могут быть секреты.', 'error');
@@ -165,8 +210,13 @@ export async function handleImageSend(text) {
     }
   } catch (err) {
     setStatus('');
-    addMsg('📷 Ошибка распознавания: ' + err.message + (err.message.includes('OCR') ? '' : ' (нужен интернет для первой загрузки языков OCR)'), 'error');
+    if (err.message && err.message.includes('отменена')) {
+      addMsg('📷 Распознавание отменено.', 'error');
+    } else {
+      addMsg('📷 Ошибка распознавания: ' + err.message + (err.message.includes('OCR') ? '' : ' (нужен интернет для первой загрузки языков OCR)'), 'error');
+    }
   } finally {
+    ocrRunning = false;
     stream.setStreaming(false);
     $('input').focus();
   }
@@ -181,6 +231,11 @@ export function importScreenshot(dataUrl) {
 }
 
 export function initImageInputs() {
+  // Esc во время распознавания — отмена OCR (main.js тем временем вызовет stopChat,
+  // который безопасен, если чат не запущен)
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && ocrRunning) cancelOcr();
+  });
   $('input').addEventListener('paste', handlePaste);
   window.addEventListener('paste', handlePaste);
   const container = $('chatContainer');

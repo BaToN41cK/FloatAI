@@ -1,7 +1,29 @@
-// Голосовой ввод: запись -> текст (Whisper через Groq, бесплатно; либо Voxtral).
-// Распознавание включается в настройках. Текст дописывается в поле ввода,
-// где его можно отредактировать перед отправкой.
+// Голосовой ввод: речь -> текст.
+// Приоритет: облако (Groq/Mistral по ключу) -> Web Speech API (встроен в Electron).
 import { $, setStatus } from './ui.js';
+import { store } from './store.js';
+
+// Web Speech API — встроено в Chromium/Electron, без загрузки моделей и ключей.
+function transcribeWithWebSpeech() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) throw new Error('Распознавание речи не поддерживается');
+  const recognition = new SpeechRecognition();
+  recognition.lang = 'ru-RU';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  recognition.continuous = false;
+  return new Promise((resolve, reject) => {
+    let done = false;
+    recognition.onresult = (e) => { done = true; resolve(e.results[0][0].transcript); };
+    recognition.onerror = (e) => {
+      if (done) return; done = true;
+      const err = { 'no-speech':'Речь не обнаружена','audio-capture':'Микрофон недоступен','not-allowed':'Доступ к микрофону запрещён','network':'Ошибка сети (возможно, Google заблокирован)','aborted':'Распознавание прервано' };
+      reject(new Error(err[e.error] || 'Ошибка распознавания'));
+    };
+    recognition.onend = () => { if (!done) { done = true; reject(new Error('Речь не распознана')); } };
+    recognition.start();
+  });
+}
 
 function appendToInput(text) {
   const input = $('input');
@@ -36,45 +58,86 @@ export function initVoice() {
   }
 
   async function startRecording() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus' : 'audio/webm';
-      audioChunks = [];
-      mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
-      mediaRecorder.ondataavailable = (e) => { if (e.data.size) audioChunks.push(e.data); };
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach(track => track.stop());
-        const blob = new Blob(audioChunks, { type: mime });
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let hasCloud = false;
+    try { hasCloud = await window.api.voiceIsCloud(); } catch (_) { hasCloud = false; }
+
+    // Есть облачный ключ — используем его (запись через MediaRecorder).
+    if (hasCloud && navigator.mediaDevices && window.MediaRecorder) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus' : 'audio/webm';
         audioChunks = [];
-        mediaRecorder = null;
-        try {
-          const result = await window.api.transcribeAudio(arrayBufferToBase64(await blob.arrayBuffer()), mime);
-          if (!result.ok) throw new Error(result.error || 'Не удалось распознать речь');
-          if (result.text) { appendToInput(result.text); setStatus(''); }
-          else setStatus('🎙 Речь не распознана. Попробуй ещё раз.');
-        } catch (err) {
-          setStatus('🎙 ' + err.message);
-          setTimeout(() => setStatus(''), 5000);
-        } finally {
-          btnMic.disabled = false;
-        }
-      };
+        mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size) audioChunks.push(e.data); };
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach(track => track.stop());
+          const blob = new Blob(audioChunks, { type: mime });
+          audioChunks = [];
+          mediaRecorder = null;
+          try {
+            const result = await window.api.transcribeAudio(arrayBufferToBase64(await blob.arrayBuffer()), mime);
+            if (!result.ok) throw new Error(result.error || 'Не удалось распознать речь');
+            const text = result.text || '';
+            if (text) { appendToInput(text); setStatus(''); }
+            else setStatus('🎙 Речь не распознана. Попробуй ещё раз.');
+          } catch (err) {
+            setStatus('🎙 ' + err.message);
+            setTimeout(() => setStatus(''), 8000);
+          } finally {
+            btnMic.disabled = false;
+          }
+        };
+        recording = true;
+        btnMic.classList.add('recording');
+        setStatus('🎙 говори… нажми ещё раз');
+        mediaRecorder.start();
+      } catch (err) {
+        recording = false;
+        btnMic.classList.remove('recording');
+        setStatus('🎙 Нет доступа к микрофону или микрофон не найден.');
+        setTimeout(() => setStatus(''), 5000);
+      }
+      return;
+    }
+
+    // Облачного ключа нет — используем Web Speech API (встроен в Electron).
+    if (SpeechRecognition) {
       recording = true;
       btnMic.classList.add('recording');
-      setStatus('🎙 говори… нажми ещё раз, чтобы вставить текст');
-      mediaRecorder.start();
-    } catch (err) {
-      recording = false;
-      btnMic.classList.remove('recording');
-      setStatus('🎙 Нет доступа к микрофону или микрофон не найден.');
-      setTimeout(() => setStatus(''), 5000);
+      btnMic.disabled = true;
+      setStatus('🎙 говори…');
+      try {
+        const text = await transcribeWithWebSpeech();
+        if (text) { appendToInput(text); setStatus(''); }
+        else setStatus('🎙 Речь не распознана');
+      } catch (err) {
+        setStatus('🎙 ' + err.message);
+        setTimeout(() => setStatus(''), 8000);
+      } finally {
+        recording = false;
+        btnMic.classList.remove('recording');
+        btnMic.disabled = false;
+      }
+      return;
     }
+
+    setStatus('🎙 Распознавание речи недоступно. Добавьте ключ Groq/Mistral в настройки.');
+    setTimeout(() => setStatus(''), 8000);
   }
 
-  if (navigator.mediaDevices && window.MediaRecorder) {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (navigator.mediaDevices && (window.MediaRecorder || SpeechRecognition)) {
     btnMic.addEventListener('click', () => recording ? finishRecording() : startRecording());
-  } else {
-    btnMic.style.display = 'none';
   }
+  // Видимость микрофона: галочка «Голосовой ввод» в настройках («Прочее»).
+  // Выключено (по умолчанию) — значок 🎙 скрыт с панели ввода.
+  const applyVoiceVisibility = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const supported = !!(navigator.mediaDevices && (window.MediaRecorder || SpeechRecognition));
+    btnMic.style.display = (supported && store.state.voiceEnabled) ? '' : 'none';
+  };
+  store.subscribe((key) => { if (key === 'voiceEnabled') applyVoiceVisibility(); });
+  applyVoiceVisibility();
 }

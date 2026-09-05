@@ -59,5 +59,15 @@ contextBridge.exposeInMainWorld('api', {
   sendImageText: (question, text, confidence) => ipcRenderer.invoke('chat:ocr-text', { question, text, confidence }),
 
   // Голосовое сообщение: распознаём речь через Mistral Voxtral -> получаем текст
-  transcribeAudio: (b64, mime) => ipcRenderer.invoke('voice:transcribe', { b64, mime })
+  transcribeAudio: (b64, mime) => ipcRenderer.invoke('voice:transcribe', { b64, mime }),
+  // Есть ли облачный ключ распознавания (true) — иначе работаем локально (Авто)
+  voiceIsCloud: () => ipcRenderer.invoke('voice:mode').then(m => m === 'cloud'),
+  // Скачивание бинарника (модель распознавания) через main-процесс с прокси
+  downloadBinary: (url) => ipcRenderer.invoke('net:download', url),
+
+  // Локальные модели Ollama: список / скачивание / удаление (менеджер в настройках)
+  getOllamaModels: () => ipcRenderer.invoke('ollama:list'),
+  pullOllamaModel: (name) => ipcRenderer.send('ollama:pull', name),
+  deleteOllamaModel: (name) => ipcRenderer.send('ollama:delete', name),
+  onOllamaEvent: (cb) => ipcRenderer.on('ollama:event', (_e, d) => cb(d))
 });
