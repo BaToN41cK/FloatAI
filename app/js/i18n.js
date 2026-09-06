@@ -9,6 +9,15 @@ const T = {
     'Язык интерфейса': 'Interface language',
     'Поиск в интернете (выдача сайтов)': 'Web search (site results)',
     'Ключ Brave Search API': 'Brave Search API key',
+    'Режим поиска': 'Search mode',
+    'DuckDuckGo (бесплатный, без ключа)': 'DuckDuckGo (free, no key)',
+    'Tavily (бесплатный ключ, 1000/мес)': 'Tavily (free key, 1000/month)',
+    'Google CSE (бесплатный ключ, 100/день)': 'Google CSE (free key, 100/day)',
+    'Brave Search (ключ, 2000/мес)': 'Brave Search (key, 2000/month)',
+    'Ключ поискового API': 'Search API key',
+    'DuckDuckGo работает сразу без ключа. Tavily, Google и Brave — требуют бесплатный ключ.': 'DuckDuckGo works immediately without a key. Tavily, Google and Brave require a free key.',
+    'Получи бесплатно на app.tavily.com (1000 запросов/мес).': 'Get it free at app.tavily.com (1000 requests/month).',
+    'Получи бесплатно на console.cloud.google.com (100 запросов/день).': 'Get it free at console.cloud.google.com (100 requests/day).',
     'Прозрачность окна': 'Window opacity', 'Размер шрифта': 'Font size',
     'Прокси (нужен перезапуск)': 'Proxy (restart required)',
     'Адрес своего AI API (для своего провайдера)': 'Custom AI API endpoint (custom provider)',
@@ -30,7 +39,27 @@ const T = {
     'Happ/v2rayN: socks5://127.0.0.1:10808 (порт SOCKS) или http://127.0.0.1:10809 (порт HTTP).': 'Happ/v2rayN: socks5://127.0.0.1:10808 (SOCKS port) or http://127.0.0.1:10809 (HTTP port).',
     'Спроси что-нибудь…': 'Ask something…',
     'Голосовое сообщение: речь → текст (можно отредактировать перед отправкой)': 'Voice message: speech → text (editable before sending)',
-    'Отправить': 'Send'
+    'Отправить': 'Send',
+    // Ollama model manager
+    'Скачанные модели': 'Downloaded models',
+    'Скачать': 'Download',
+    'Удалить': 'Delete',
+    'Название модели (например, qwen2.5:7b)': 'Model name (e.g., qwen2.5:7b)',
+    '⏳ Скачиваю...': '⏳ Downloading...',
+    'Ollama не запущена': 'Ollama is not running',
+    // Web tools
+    'Веб-инструменты выключены': 'Web tools are disabled',
+    'Ошибка: не указан query': 'Error: query is not specified',
+    'Ошибка: не указан url': 'Error: URL is not specified',
+    'Ошибка: этот адрес открывать нельзя': 'Error: this URL cannot be opened',
+    'Ошибка: этот сайт заблокирован': 'Error: this site is blocked',
+    'Ошибка инструмента': 'Tool error',
+    // Web Speech
+    'Распознавание речи: облако (если есть ключ) или браузер': 'Speech recognition: cloud (if key exists) or browser',
+    // Search mode
+    'Режим поиска': 'Search mode',
+    'Авто (без ключа)': 'Auto (no key)',
+    'Brave Search API': 'Brave Search API'
   }
 };
 
@@ -62,7 +91,20 @@ T.zh = {
   'Happ/v2rayN: socks5://127.0.0.1:10808 (порт SOCKS) или http://127.0.0.1:10809 (порт HTTP).': 'Happ/v2rayN：socks5://127.0.0.1:10808（SOCKS 端口）或 http://127.0.0.1:10809（HTTP 端口）。',
   'Спроси что-нибудь…': '输入问题…',
   'Голосовое сообщение: речь → текст (можно отредактировать перед отправкой)': '语音消息：语音 → 文字（发送前可编辑）',
-  'Отправить': '发送'
+  'Отправить': '发送',
+    // Ollama model manager
+    'Скачанные модели': '已下载的模型',
+    'Скачать': '下载',
+    'Удалить': '删除',
+    'Название модели (например, qwen2.5:7b)': '模型名称（例如 qwen2.5:7b）',
+    '⏳ Скачиваю...': '⏳ 下载中...',
+    'Ollama не запущена': 'Ollama 未运行',
+    // Web Speech
+    'Распознавание речи: облако (если есть ключ) или браузер': '语音识别：云端（如有密钥）或浏览器',
+    // Search mode
+    'Режим поиска': '搜索模式',
+    'Авто (без ключа)': '自动（无需密钥）',
+    'Brave Search API': 'Brave Search API'
 };
 
 export const LANG_NAMES = { ru: 'Русский', en: 'English', zh: '中文', de: 'Deutsch', es: 'Español', fr: 'Français' };

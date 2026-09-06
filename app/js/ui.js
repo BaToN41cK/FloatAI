@@ -100,19 +100,17 @@ export const stream = {
   beginReply() { activeRawMd = ''; activeReplyDiv = addMsg('печатает…', 'assistant'); return activeReplyDiv; },
   appendChunk(chunk) {
     if (!activeReplyDiv) return;
-    // Первый реальный чанк: сбрасываем предварительный peek-ответ (его подставили),
-    // чтобы финальный стриминг начался с чистого блока.
-    const isFirst = activeRawMd === '';
+    // Накапливаем сырой markdown. Не сбрасываем «печатает…» и не показываем
+    // сырой текст: до отрисовки rAF в DOM остаётся предыдущий отрендеренный HTML
+    // (или заглушка «печатает…» для самого первого чанка). Это убирает
+    // «мигание» сырым markdown-источником между кадрами.
     activeRawMd += chunk;
     const md = activeReplyDiv.querySelector('.md');
-    if (isFirst || md.textContent === 'печатает…') md.textContent = '';
-    md.classList.remove('md');
-    md.textContent = activeRawMd;
     streamMd = md;
     if (!renderFrame) {
       renderFrame = requestAnimationFrame(() => {
         renderFrame = 0;
-        if (streamMd) renderMarkdown(streamMd, streamMd.textContent);
+        if (streamMd) renderMarkdown(streamMd, activeRawMd);
       });
     }
     $('tokenStatus').textContent = `токены: ~${Math.ceil(activeRawMd.length / 3)}`;
@@ -120,7 +118,10 @@ export const stream = {
   },
   commitReply() {
     if (renderFrame) { cancelAnimationFrame(renderFrame); renderFrame = 0; }
-    if (streamMd) { renderMarkdown(streamMd, streamMd.textContent); streamMd = null; }
+    // Используем activeRawMd (а не streamMd.textContent) — это самый свежий
+    // накопленный markdown. Раньше streamMd.textContent мог быть пустым или
+    // устаревшим, если rAF ещё не отработал после смены логики appendChunk.
+    if (streamMd) { renderMarkdown(streamMd, activeRawMd); streamMd = null; }
     activeReplyDiv = null;
     activeRawMd = '';
     $('tokenStatus').textContent = '';

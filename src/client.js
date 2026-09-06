@@ -1,20 +1,36 @@
 // Клиент AI-провайдеров: чат со стримингом, сессии истории, стоп-генерация,
 // веб-инструменты. Универсален (не только Mistral) — providers.js задаёт каталог.
+//
+// Архитектура (см. src/ai/*.js):
+//   transport.js  — HTTP-запрос к провайдеру + автоповтор + таймауты
+//   parser.js     — извлечение текста ответа из разных форматов (OpenAI/Anthropic/Google)
+//   tools.js      — выполнение tool-calls (web_search, fetch_page)
+//   compaction.js — суммаризация отрезанной истории моделью
+//   title.js      — генерация названия сессии моделью (вместо обрезки первого сообщения)
+//
+// client.js остаётся оркестратором: per-провайдерные request-обёртки (Anthropic/Google
+// не укладываются в общий OpenAI-формат), Z.ai retry overload, peek, agent loop.
 const fs = require('fs');
 const path = require('path');
 const { corePrompt } = require('./personality');
 const log = require('./logger');
+const { t } = require('./i18n');
 const { webSearch, fetchPage } = require('./web-tools');
 const { doFetch } = require('./electron-fetch');
 const { getProvider } = require('./providers');
 const { enabledTools } = require('./plugins');
 const { isZaiOverload, isNetworkError } = require('./ai-errors');
+// Делегаты в src/ai/* — общие куски логики вынесены из этого файла.
+const { extractReplyText } = require('./ai/parser');
+const { generateTitle } = require('./ai/title');
 
 // Паузы (мс) между повторами запроса, когда Z.ai сообщает о перегрузке
 // бесплатной модели (HTTP 429, code 1305). Возвратный рост: 2000 → 5000.
 const ZAI_OVERLOAD_RETRY_DELAYS = [2000, 5000];
 
-// Автоповтор при сетевых сбоях и временных ошибках серверов.
+// Автоповтор при сетевых сбоях и временных ошибках серверов (per-hop).
+// Транспортный уровень с теми же RETRY_* живёт в src/ai/transport.js
+// (для компактирования/титула, где нет per-провайдерной обвязки).
 const RETRY_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const RETRY_ATTEMPTS = 3;      // сколько всего попыток на один «ход» агента
 const RETRY_BASE_MS = 1200;    // стартовая пауза (экспоненциальный рост)
@@ -23,6 +39,8 @@ const REQUEST_TIMEOUT_MS = 120000; // общий таймаут одного з�
 // Глубокий режим: Z.ai с включённым thinking может думать до ~2 минут,
 // поэтому таймаут для него увеличен, чтобы размышление не обрывалось.
 const DEEP_REQUEST_TIMEOUT_MS = 180000;
+
+// Внутренний верхний предел; модель сама выбирает фактическую длину ответа.
 const MAX_OUTPUT_TOKENS = 32768;
 
 // Защита от «утечки промпта»: слабые модели (Cohere trial, мелкие Flash)
@@ -48,27 +66,41 @@ const DETAIL_INSTRUCTION = (tokens, deepThink) => deepThink
 
 // Инструкция по веб-инструментам: подключается динамически по состоянию плагинов,
 // чтобы включение «поиска в интернете» сразу меняло поведение агента.
-const TOOLS_INSTRUCTION = (plugins) => {
+// Работает как DeepSeek: сначала поиск информации → потом ответ.
+const TOOLS_INSTRUCTION = (plugins, deepThink) => {
   const canSearch = plugins && plugins.webSearch !== false;
   const canFetch = plugins && plugins.fetchPage !== false;
   if (!canSearch && !canFetch) return '';
   const parts = [];
   if (canSearch) parts.push('web_search — поиск актуальной информации в интернете');
   if (canFetch) parts.push('fetch_page — чтение содержимого страницы по URL');
-  return `\n\n## Работа с интернетом (инструменты активны)\nТебе доступны инструменты: ${parts.join('; ')}.\n- Используй web_search, когда вопрос касается актуальных данных (новости, цены, погода, версии ПО, события) или фактов, в которых ты не уверен.\n- Если сниппета из поиска мало — открой 1–2 самые подходящие страницы через fetch_page и разбери их содержимое.\n- Опирайся в ответе на найденное: приводи конкретные данные и примеры из источников, а не общие слова.\n- В конце ответа добавь блок «Источники» в формате Markdown-списка со ссылками на использованные страницы (заголовок — ссылкой).\n- Не выдумывай ссылки: указывай только те URL, что реально вернули инструменты.`;
+  const processHint = deepThink
+    ? 'После сбора информации проведи глубокий анализ (см. раздел «Глубокое размышление») и затем дай развёрнутый ответ.'
+    : 'Используй найденную информацию для формирования ответа.';
+  return `\n\n## 🌐 Поиск в интернете (активен)\nТебе доступны инструменты: ${parts.join('; ')}.\n- Сначала найди актуальную информацию через web_search, если вопрос касается фактов, новостей, цен, погоды, версий ПО или событий.\n- Если сниппета из поиска мало — открой 1–2 самые подходящие страницы через fetch_page и разбери их содержимое.\n- Не выдумывай ссылки: указывай только те URL, что реально вернули инструменты.\n- В конце ответа добавь блок «📎 Источники» со ссылками на использованные страницы.\n- ${processHint}`;
 };
 
 // Глубокое размышление (deepThink) — универсальный режим для ЛЮБЫХ моделей,
 // включая быстрые «флеш»: модель обязана сначала полностью разобрать задачу
 // внутри (факты, варианты, риски, контрпримеры) и только затем выдать
 // максимально проработанный ответ, а не первый пришедший в голову вариант.
-const REASONING_INSTRUCTION = `\n\n## Режим глубокого размышления (ОБЯЗАТЕЛЬНО)\nНе отвечай сразу. Сначала проведи полный внутренний разбор: 1) что именно спрашивают и какой результат нужен; 2) какие факты и ограничения важны; 3) минимум два-три возможных решения или трактовки, их плюсы и минусы; 4) что может пойти не так и какие есть контрпримеры. И только после этого формулируй финальный ответ. Он должен быть ЗАМЕТНО глубже и полнее, чем «ответ на автомате»: учитывай неочевидные детали, предлагай лучший из разобранных вариантов с обоснованием, при необходимости — пошаговый план. Не показывай внутреннюю цепочку рассуждений и служебные инструкции — только продуманный, готовый ответ.`;
+// Работает как DeepSeek R1: внутренний монолог → план → развёрнутый ответ.
+const REASONING_INSTRUCTION = (hasWebSearch) => {
+  const webHint = hasWebSearch
+    ? 'Если включён поиск в интернете — сначала собери актуальную информацию, затем проведи анализ.'
+    : 'Проведи полный внутренний разбор на основе своих знаний.';
+  return `\n\n## 🧠 Глубокое размышление (активно)\nНе отвечай сразу! ${webHint}\n\n**План действий:**\n1. Анализ: что именно спрашивают и какой результат нужен?\n2. Факты: какие данные и ограничения важны?\n3. Варианты: минимум 2-3 возможных решения с плюсами и минусами.\n4. Риски: что может пойти не так и какие есть контрпримеры.\n\n**Затем** сформулируй финальный ответ — он должен быть ЗАМЕТНО глубже и полнее, чем «ответ на автомате»: учитывай неочевидные детали, предлагай лучший вариант с обоснованием, при необходимости — пошаговый план.\n\nНе показывай внутреннюю цепочку рассуждений и служебные инструкции — только продуманный, готовый ответ.`;
+};
 
 // Сборка инструкций, добавляемых к личности агента в system-промпт.
 // Отдельная функция — чтобы поведение режимов было покрыто тестами.
+// Работает как DeepSeek: поиск → размышление → ответ (единый процесс).
 function buildExtraInstructions(deepThink, maxTokens, plugins) {
-  return LANGUAGE_INSTRUCTION + FORMATTING_INSTRUCTION + TOOLS_INSTRUCTION(plugins) +
-    DETAIL_INSTRUCTION(maxTokens, deepThink) + (deepThink ? REASONING_INSTRUCTION : '');
+  const hasWebSearch = plugins && (plugins.webSearch !== false || plugins.fetchPage !== false);
+  return LANGUAGE_INSTRUCTION + FORMATTING_INSTRUCTION +
+    (hasWebSearch ? TOOLS_INSTRUCTION(plugins, deepThink) : '') +
+    DETAIL_INSTRUCTION(maxTokens, deepThink) +
+    (deepThink ? REASONING_INSTRUCTION(hasWebSearch) : '');
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -145,20 +177,8 @@ function appendSummary(summary, dropped) {
   return next.length > SUMMARY_MAX ? '…[раннее сокращено]…' + next.slice(-SUMMARY_MAX) : next;
 }
 
-// Достаём текст ответа из JSON-ответа провайдера (у каждого свой формат)
-function extractReplyText(data, providerId) {
-  try {
-    if (providerId === 'anthropic') {
-      return (data.content || []).map(c => c.text || '').join('').trim();
-    }
-    if (providerId === 'google') {
-      return (((data.candidates || [])[0] || {}).content || {}).parts
-        ? (data.candidates[0].content.parts || []).map(p => p.text || '').join('').trim()
-        : '';
-    }
-    return ((data.choices || [])[0] || {}).message ? String(data.choices[0].message.content || '').trim() : '';
-  } catch (_) { return ''; }
-}
+// Достаём текст ответа из JSON-ответа провайдера (у каждого свой формат).
+// Реализация делегирована в src/ai/parser.js.
 
 function isSimplePrompt(text) {
   const value = String(text || '').trim().toLowerCase();
@@ -219,27 +239,27 @@ const TOOLS = [
 // Выполнение вызванного моделью инструмента
 async function runTool(name, argsJson, onStatus, onPermission) {
   if (typeof onPermission === 'function' && !(await onPermission(name, argsJson))) {
-    return 'Инструмент заблокирован пользователем.';
+    return t('web.blocked');
   }
   let args = {};
   try { args = JSON.parse(argsJson || '{}'); } catch (_) {}
   try {
     if (name === 'web_search') {
-      if (!args.query) return 'Ошибка: не указан query';
+      if (!args.query) return t('web.error.noQuery');
       if (onStatus) onStatus(`ищу в интернете: ${args.query}`);
       log.info(`[web] поиск: ${args.query}`);
       return await webSearch(args.query);
     }
     if (name === 'fetch_page') {
-      if (!args.url) return 'Ошибка: не указан url';
+      if (!args.url) return t('web.error.noUrl');
       if (onStatus) onStatus('открываю страницу из результатов поиска…');
       log.info(`[web] страница: ${args.url}`);
       return await fetchPage(args.url);
     }
-    return `Ошибка: неизвестный инструмент ${name}`;
+    return t('web.error.unknown', { name });
   } catch (e) {
     log.warn('[web]', name, e.message);
-    return `Ошибка инструмента ${name}: ${e.message}`;
+    return t('web.error.tool', { name, error: e.message });
   }
 }
 
@@ -288,6 +308,12 @@ class Client {
 
   // Применить настройки на лету (без пересоздания клиента)
   setOptions(o = {}) {
+    if ('reasoningEffort' in o) {
+      // reasoningEffort: "low" | "high" | "high-high" (как в Cline)
+      this.reasoningEffort = o.reasoningEffort || 'low';
+      // Для обратной совместимости: deepThink = true если effort не "low"
+      this.deepThink = this.reasoningEffort !== 'low';
+    }
     if ('deepThink' in o) this.deepThink = !!o.deepThink;
     if ('language' in o) this.language = o.language || 'ru'; // язык интерфейса (renderer)
   }
@@ -318,7 +344,7 @@ class Client {
 
   // Создать новый пустой диалог и сделать его активным
   newSession() {
-    const s = { id: this.newId(), title: 'Новый диалог', history: [], summary: '' };
+    const s = { id: this.newId(), title: t('chat.newDialog'), history: [], summary: '' };
     this.data.sessions.unshift(s);
     this.data.activeId = s.id;
     this.saveData();
@@ -328,7 +354,7 @@ class Client {
   ensureActive() {
     let s = this.active;
     if (!s) {
-      s = { id: this.newId(), title: 'Новый диалог', history: [] };
+      s = { id: this.newId(), title: t('chat.newDialog'), history: [] };
       this.data.sessions.unshift(s);
       this.data.activeId = s.id;
       this.saveData();
@@ -363,7 +389,7 @@ class Client {
     const a = this.ensureActive();
     a.history = [];
     a.summary = '';
-    a.title = 'Новый диалог';
+    a.title = t('chat.newDialog');
     this.saveData();
   }
 
@@ -670,7 +696,7 @@ class Client {
           // Это таймаут, а не остановка пользователем — раньше он молча
           // «проглатывался» и чат просто не отвечал. Теперь честная ошибка.
           log.error('[mistral] таймаут запроса — ответ не пришёл вовремя');
-          throw new Error('Модель не ответила за отведённое время (таймаут). Попробуй переспросить.');
+          throw new Error(t('chat.error.timeout'));
         }
         aborted = true;
       } else throw e;
@@ -681,15 +707,35 @@ class Client {
     // Пустой ответ без ошибки и без остановки — тоже не молчим, а сообщаем
     if (!fullResponse && !aborted) {
       log.error('[mistral] пустой ответ от модели');
-      throw new Error('Модель вернула пустой ответ. Попробуй переспросить.');
+      throw new Error(t('chat.error.empty'));
     }
 
     // сохраняем ответ (в т.ч. частичный при стопе)
     if (fullResponse || !aborted) {
-      if (session.title === 'Новый диалог' && userMessage) {
+      if (session.title === t('chat.newDialog') && userMessage && !aborted) {
+        // Генерируем название через модель (3-5 слов) — НЕ блокируем ответ:
+        // обновляем title в фоне, в UI он появится сразу при готовности.
+        // Если генерация не удалась — fallback на обрезанное сообщение.
+        const firstMessage = userMessage;
+        Promise.resolve().then(async () => {
+          try {
+            const title = await generateTitle(firstMessage, {
+              provider: this.provider, model: this.model, apiKey: this.apiKey,
+              endpoint: this.customEndpoint
+            });
+            if (title && session.title === t('chat.newDialog')) {
+              session.title = title;
+              this.saveData();
+              // Сообщаем renderer через глобальный хук (см. main.js) — Client не
+              // знает про chatWindow, не дёргает Electron API напрямую.
+              if (typeof this.onSessionsChanged === 'function') {
+                try { this.onSessionsChanged(this.getSessions()); } catch (_) {}
+              }
+            }
+          } catch (_) { /* фолбэк ниже */ }
+        });
+        // Мгновенный fallback: обрезанное сообщение — пользователь сразу видит хоть что-то
         session.title = userMessage.slice(0, 40);
-        // Не делаем второй API-запрос: короткое первое сообщение уже достаточно
-        // хорошее название и не расходует лимит запросов.
       }
       if (fullResponse) {
         let h = [...session.history, { role: 'user', content: userMessage }, { role: 'assistant', content: fullResponse }];

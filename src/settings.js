@@ -42,10 +42,13 @@ const DEFAULTS = {
   // пользователь решает сам, включать ли распознавание речи.
   speechEnabled: true,
   voiceApiKey: '',
-  braveApiKey: '',
+  searchMode: 'ddg',
+  searchApiKey: '',
   // Ключи по провайдерам: вставил один раз — при переключении провайдера
   // подставляется сам (на диск пишутся зашифрованными через safeStorage)
   providerKeys: {},
+  // Последняя выбранная модель для каждого провайдера (как в Cline)
+  providerModels: {},
   // Голосовой ввод по умолчанию выключен: включается галочкой в «Прочее»
   voiceEnabled: false,
   proxy: '',
@@ -57,9 +60,10 @@ const DEFAULTS = {
   ,opacity: 1,
   customEndpoint: '',
   fontSize: 13,
-  // Глубокое размышление выключено по умолчанию: модель отвечает быстро
-  // и коротко; внутренний лимит ответа задаётся клиентом.
-  deepThink: false,
+  // Reasoning Effort (Глубокое мышление):
+  // "low" = выключено (быстрые ответы), "high-high" = включено (глубокое мышление)
+  // Как в Cline: при вкл галочке = "High-High", при выкл = "Low"
+  reasoningEffort: 'low',
   language: 'ru',
   plugins: { webSearch: true, fetchPage: true }
 };
@@ -81,15 +85,33 @@ function load() {
   // Расшифровываем карту ключей по провайдерам (на диске — зашифрованные)
   const providerKeys = {};
   for (const [k, v] of Object.entries(saved.providerKeys || {})) providerKeys[k] = decryptApiKey(v);
+
+  // Миграция: deepThink (boolean) → reasoningEffort (string)
+  // deepThink: true → "high-high", deepThink: false → "low"
+  let reasoningEffort = saved.reasoningEffort;
+  if (!reasoningEffort && 'deepThink' in saved) {
+    reasoningEffort = saved.deepThink ? 'high-high' : 'low';
+  }
+
+  // Восстанавливаем последнюю модель для текущего провайдера (как в Cline)
+  const providerModels = { ...(saved.providerModels || {}) };
+  const currentProviderModel = providerModels[saved.provider];
+  const activeModel = currentProviderModel || fixedModel || DEFAULTS.model;
+
   cache = {
     ...DEFAULTS, ...saved,
-    model: fixedModel || DEFAULTS.model,
+    model: activeModel,
     plugins: { ...DEFAULTS.plugins, ...(saved.plugins || {}) },
     providerKeys: { ...DEFAULTS.providerKeys, ...providerKeys },
+    providerModels: providerModels,
+    reasoningEffort: reasoningEffort || DEFAULTS.reasoningEffort,
     apiKey: decryptApiKey(saved.apiKeyEncrypted || ''),
     voiceApiKey: decryptApiKey(saved.voiceApiKeyEncrypted || '') || require('./secret-keys').groq(),
-    braveApiKey: decryptApiKey(saved.braveApiKeyEncrypted || '')
+    searchMode: saved.searchMode || 'ddg',
+    searchApiKey: decryptApiKey(saved.searchApiKeyEncrypted || '')
   };
+  // Удаляем устаревшее поле из кэша
+  delete cache.deepThink;
   // Миграция старых настроек: mistral по умолчанию без ключа -> Auto
   if (!cache.apiKey && (cache.provider === 'mistral' && saved.provider === undefined)) {
     cache.provider = 'auto';
@@ -113,10 +135,15 @@ function save(partial) {
   const diskNext = { ...next };
   if (encryptedKey) diskNext.apiKeyEncrypted = encryptedKey;
   delete diskNext.apiKey;
+
   // Ключи по провайдерам: сохраняем в поле текущего провайдера и шифруем каждый
   next.providerKeys = { ...(current.providerKeys || {}), ...(partial.providerKeys || {}) };
   if (partial.provider && Object.prototype.hasOwnProperty.call(partial, 'apiKey')) {
     next.providerKeys[partial.provider] = String(partial.apiKey || '');
+  }
+  // Также сохраняем ключ из общего поля apiKey для текущего провайдера
+  if (partial.provider && partial.apiKey) {
+    next.providerKeys[partial.provider] = String(partial.apiKey);
   }
   const encProviderKeys = {};
   for (const [k, v] of Object.entries(next.providerKeys)) {
@@ -124,8 +151,15 @@ function save(partial) {
     encProviderKeys[k] = encryptApiKey(v) || String(v); // без safeStorage (dev) — как есть
   }
   diskNext.providerKeys = encProviderKeys;
+
+  // Сохраняем последнюю выбранную модель для каждого провайдера (как в Cline)
+  next.providerModels = { ...(current.providerModels || {}), ...(partial.providerModels || {}) };
+  if (partial.provider && partial.model) {
+    next.providerModels[partial.provider] = partial.model;
+  }
+  diskNext.providerModels = next.providerModels;
   // Голосовой ключ Groq и ключ Brave Search API шифруем так же, как основной API-ключ
-  for (const plainKey of ['voiceApiKey', 'braveApiKey']) {
+  for (const plainKey of ['voiceApiKey', 'searchApiKey']) {
     if (next[plainKey]) {
       try {
         if (safeStorage && safeStorage.isEncryptionAvailable()) {

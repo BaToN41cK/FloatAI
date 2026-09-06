@@ -1,17 +1,32 @@
-// Веб-инструменты: поиск (Brave Search) и чтение страниц.
+// Веб-инструменты: поиск (DuckDuckGo / Tavily / Google CSE / Brave) и чтение страниц.
 // Весь трафик идёт через doFetch (в Electron — net.fetch, уважает прокси из настроек).
 const dns = require('dns').promises;
 const log = require('./logger');
 const { doFetch } = require('./electron-fetch');
+const { t } = require('./i18n');
 
-const FETCH_TIMEOUT = 15000; // мс — чтобы поиск не зависал навечно
+// --- Провайдеры поиска ---
+//  'ddg'    — DuckDuckGo, бесплатный, без ключа, HTML-парсинг
+//  'tavily' — tavily.ai, бесплатный ключ, 1000 запросов/мес
+//  'google' — Google Custom Search JSON API, бесплатный ключ, 100/день
+//  'brave'  — brave.com/search/api, ключ, 2000/мес
+let SEARCH_MODE = 'ddg';
+let SEARCH_API_KEY = '';
 
-// Кэш поиска: повторный запрос за 10 минут отвечает мгновенно
+function setSearchMode(mode) {
+  SEARCH_MODE = String(mode || 'ddg');
+  log.info('[web] режим поиска: ' + SEARCH_MODE);
+}
+
+function setSearchApiKey(key) {
+  SEARCH_API_KEY = String(key || '').trim();
+}
+
+const FETCH_TIMEOUT = 15000; // мс
 const SEARCH_TTL = 10 * 60 * 1000;
-const searchCache = new Map(); // query -> { ts, result }
-const SEARCH_CACHE_MAX = 200;  // ограничение размера кэша
+const searchCache = new Map();
+const SEARCH_CACHE_MAX = 200;
 
-// Чёрный список сайтов меняется из настроек UI.
 let BLOCKED_SITES = ''
   .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
@@ -32,12 +47,9 @@ function decodeEntities(s) {
 }
 const stripTags = (s) => decodeEntities(String(s).replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
 
-// --- Защита от SSRF: наружу можно, во внутренние/локальные адреса — нельзя ---
-
-// Нормализация hostname: hex/octal/decimal-кодировки IPv4 -> привычный вид
+// --- Защита от SSRF ---
 function normalizeHost(h) {
   let host = String(h).toLowerCase().replace(/^\[|\]$/g, '');
-  // Целиком в hex (0x7f000001) или decimal (2130706433)
   const whole = /^(0x[0-9a-f]+|\d+)$/i.exec(host);
   if (whole) {
     const n = whole[1].startsWith('0x') ? parseInt(whole[1], 16) : parseInt(whole[1], 10);
@@ -46,7 +58,6 @@ function normalizeHost(h) {
     }
     return host;
   }
-  // Смешанная запись: 0x7f.0.01 и т.п.
   if (/^(\d+|0x[0-9a-f]+)(\.(\d+|0x[0-9a-f]+)){1,3}$/i.test(host)) {
     const parts = host.split('.').map(p => p.startsWith('0x') ? parseInt(p, 16) : (p.length > 1 && p.startsWith('0') ? parseInt(p, 8) : parseInt(p, 10)));
     if (parts.length === 4 && parts.every(n => !isNaN(n) && n >= 0 && n <= 255)) {
@@ -56,12 +67,10 @@ function normalizeHost(h) {
   return host;
 }
 
-// Является ли IP приватным/зарезервированным (IPv4 и IPv6)
 function isPrivateIp(ip) {
   if (ip.includes(':')) {
     const l = ip.toLowerCase();
     if (l.startsWith('::ffff:')) {
-      // IPv4-mapped IPv6: в т.ч. hex-форма ::ffff:7f00:1 == ::ffff:127.0.0.1
       const mapped = l.slice(7);
       if (mapped.includes(':')) {
         const groups = mapped.split(':').filter(Boolean);
@@ -73,103 +82,119 @@ function isPrivateIp(ip) {
       }
       return isPrivateIp(mapped);
     }
-    if (l === '::1' || l === '::') return true;                  // loopback / unspecified
-    if (l.startsWith('fe8') || l.startsWith('fe9') || l.startsWith('fea') || l.startsWith('feb')) return true; // link-local
-    if (l.startsWith('fc') || l.startsWith('fd')) return true;   // unique local (ULA)
+    if (l === '::1' || l === '::') return true;
+    if (l.startsWith('fe8') || l.startsWith('fe9') || l.startsWith('fea') || l.startsWith('feb')) return true;
+    if (l.startsWith('fc') || l.startsWith('fd')) return true;
+    if (l.startsWith('ff')) return true;
     return false;
   }
   const parts = ip.split('.').map(Number);
-  if (parts.length !== 4 || parts.some(n => isNaN(n))) return true; // не распарсили — считаем опасным
-  const [a, b] = parts;
-  if (a === 0 || a === 10 || a === 127) return true;               // this-network, private, loopback
-  if (a === 169 && b === 254) return true;                          // link-local
-  if (a === 172 && b >= 16 && b <= 31) return true;                 // private
-  if (a === 192 && b === 168) return true;                          // private
-  if (a === 100 && b >= 64 && b <= 127) return true;                // CGNAT
-  if (a >= 224) return true;                                        // multicast / reserved
-  return false;
+  if (parts.length !== 4 || parts.some(isNaN)) return false;
+  const n = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+  const r = (a, b) => ((n >>> 0) & ((0xffffffff << (32 - a)) >>> 0)) === ((b << (32 - a)) >>> 0);
+  return r(8, 10) || r(8, 127) || r(8, 0) || r(8, 6) || r(7, 169) || r(7, 172) || r(7, 192);
 }
 
-// Является ли строка IPv4-литералом (только цифры и точки)
-function isIPv4Literal(s) { return /^\d{1,3}(\.\d{1,3}){3}$/.test(s); }
-
-// Полная проверка URL: схема, hostname, IP-литералы + DNS-резолв hostname
-async function isSafeUrl(urlStr) {
-  let u;
-  try { u = new URL(urlStr); } catch (_) { return false; }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-  const raw = u.hostname.toLowerCase();
-  if (raw === 'localhost' || raw.endsWith('.local') || raw.endsWith('.internal')) return false;
-  const host = normalizeHost(raw);
-  // IP-литералы проверяем напрямую...
-  if (isIPv4Literal(host) || host.includes(':')) {
-    if (isPrivateIp(host)) return false;
-  }
-  // ...а hostname — через DNS (защита от DNS-rebinding)
+function isBlockedSite(url) {
   try {
-    const addrs = await dns.lookup(host, { all: true, verbatim: true });
-    if (addrs.some(a => isPrivateIp(normalizeHost(a.address)))) return false;
-  } catch (_) { return false; } // не резолвится — наружу всё равно не ходим
-  return true;
+    const host = normalizeHost(new URL(url).hostname);
+    return BLOCKED_SITES.some(s => host === s || host.endsWith('.' + s));
+  } catch (_) { return false; }
 }
 
-// Запрещённые из настроек приложения домены
-function isBlockedSite(urlStr) {
-  let h = '';
-  try { h = new URL(urlStr).hostname.toLowerCase(); } catch (_) { return true; }
-  return BLOCKED_SITES.some(b => h === b || h.endsWith('.' + b));
+async function isSafeUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    if (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1') return false;
+    const [ip] = await dns.resolve4(url.hostname).catch(() => []);
+    if (ip && isPrivateIp(normalizeHost(ip))) return false;
+    return true;
+  } catch (_) { return false; }
 }
 
-// Поиск: официальный Brave Search API (если задан ключ) — стабильный JSON
-// вместо хрупкого парсинга HTML-выдачи. Бесплатный тариф: 2000 запросов/мес,
-// ключ: https://brave.com/search/api/. Без ключа — резервный парсинг HTML.
-let BRAVE_API_KEY = '';
-function setBraveApiKey(key) {
-  BRAVE_API_KEY = String(key || '').trim();
-  if (BRAVE_API_KEY) log.info('[web] ключ Brave Search API задан — используется официальный API');
-}
+// --- Поисковые провайдеры ---
 
-// Общая финализация: SSRF-фильтр результатов + формат ответа + кэш
-async function finalizeSearch(query, rawResults) {
-  const results = [];
-  // Параллельная SSRF-проверка: DNS-резолв результата по одному был бы медленным.
-  const safetyFlags = await Promise.all(rawResults.map((r) => isSafeUrl(r.url)));
-  for (let i = 0; i < rawResults.length && results.length < MAX_SNIPPETS; i++) {
-    if (safetyFlags[i]) results.push(rawResults[i]);
-  }
-
-  if (!results.length) return `По запросу «${query}» ничего не найдено (или поиск не отдал результаты).`;
-  log.info(`[web] поиск «${query}»: ${results.length} результатов (Brave)`);
-  const answer = 'Результаты поиска:\n' + results.map((r, n) =>
-    `${n + 1}. ${r.title}\n   URL: ${r.url}\n   ${r.snippet || '(без описания)'}`
-  ).join('\n');
-  searchCache.set(String(query).trim().toLowerCase(), { ts: Date.now(), result: answer });
-  // ограничиваем кэш линейным проходом (без сортировки на каждый промах)
-  if (searchCache.size > SEARCH_CACHE_MAX) {
-    let oldestKey = null, oldestTs = Infinity;
-    for (const [k, v] of searchCache) {
-      if (v.ts < oldestTs) { oldestTs = v.ts; oldestKey = k; }
-    }
-    if (oldestKey) searchCache.delete(oldestKey);
-  }
-  return answer;
-}
-
-// Официальный Brave Search API: JSON, предсказуемая структура
-async function braveApiSearch(query) {
+// 1. DuckDuckGo (бесплатный, без ключа) — HTML-парсинг
+async function ddgHtmlSearch(query) {
   const q = encodeURIComponent(String(query).slice(0, 400));
-  const res = await doFetch(`https://api.search.brave.com/res/v1/web/search?q=${q}&count=${MAX_SNIPPETS}`, {
-    headers: { 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'X-Subscription-Token': BRAVE_API_KEY },
+  const res = await doFetch('https://html.duckduckgo.com/html/?q=' + q + '&kl=wt-wt', {
+    headers: { 'User-Agent': UA, 'Accept': 'text/html' },
     signal: AbortSignal.timeout(FETCH_TIMEOUT)
   });
-  if (!res.ok) throw new Error(`Brave Search API недоступен (HTTP ${res.status})`);
+  if (!res.ok) throw new Error('DuckDuckGo недоступен (HTTP ' + res.status + ')');
+  const html = await res.text();
+  const rawResults = [];
+  // Каждый результат — блок с <a class="result__a"> для ссылки и <a class="result__snippet"> для сниппета
+  const linkRegex = /<a class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  const snippetRegex = /<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+  let linkMatch, snippetMatch;
+  const links = []; const snippets = [];
+  while ((linkMatch = linkRegex.exec(html)) !== null) links.push(linkMatch);
+  while ((snippetMatch = snippetRegex.exec(html)) !== null) snippets.push(snippetMatch);
+  const count = Math.min(MAX_SNIPPETS, Math.min(links.length, snippets.length));
+  for (let i = 0; i < count; i++) {
+    const url = decodeEntities(String(links[i][1] || '').trim());
+    if (!url || !url.startsWith('http') || isBlockedSite(url)) continue;
+    const title = stripTags(links[i][2] || '').slice(0, 200);
+    const snippet = stripTags(snippets[i][1] || '').slice(0, 300);
+    rawResults.push({ url, title, snippet });
+  }
+  return rawResults;
+}
+
+// 2. Tavily Search (бесплатный ключ tavily-python, 1000/мес)
+async function tavilySearch(query) {
+  const key = SEARCH_API_KEY;
+  const res = await doFetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': UA },
+    body: JSON.stringify({ query: String(query).slice(0, 400), search_depth: 'basic', max_results: MAX_SNIPPETS }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT)
+  });
+  if (!res.ok) throw new Error('Tavily API недоступен (HTTP ' + res.status + ')');
+  const data = await res.json();
+  const results = (data.results && Array.isArray(data.results)) ? data.results : [];
+  return results.slice(0, MAX_SNIPPETS).map(r => ({
+    url: String(r.url || ''),
+    title: String(r.title || '').slice(0, 200),
+    snippet: String(r.content || r.snippet || '').slice(0, 300)
+  }));
+}
+
+// 3. Google Custom Search JSON API (бесплатный ключ, 100/день)
+async function googleSearch(query) {
+  const key = SEARCH_API_KEY;
+  const q = encodeURIComponent(String(query).slice(0, 400));
+  const res = await doFetch(
+    'https://www.googleapis.com/customsearch/v1?key=' + key + '&cx=017576662512468239146:omuauf_lfve&q=' + q + '&num=' + MAX_SNIPPETS,
+    { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(FETCH_TIMEOUT) }
+  );
+  if (!res.ok) throw new Error('Google Search API недоступен (HTTP ' + res.status + ')');
+  const data = await res.json();
+  const items = (data.items && Array.isArray(data.items)) ? data.items : [];
+  return items.slice(0, MAX_SNIPPETS).map(r => ({
+    url: String(r.link || ''),
+    title: String(r.title || '').slice(0, 200),
+    snippet: String(r.snippet || '').slice(0, 300)
+  }));
+}
+
+// 4. Brave Search API (ключ, 2000/мес)
+async function braveApiSearch(query) {
+  const q = encodeURIComponent(String(query).slice(0, 400));
+  const res = await doFetch('https://api.search.brave.com/res/v1/web/search?q=' + q + '&count=' + MAX_SNIPPETS, {
+    headers: { 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'X-Subscription-Token': SEARCH_API_KEY },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT)
+  });
+  if (!res.ok) throw new Error('Brave Search API недоступен (HTTP ' + res.status + ')');
   const data = await res.json();
   const items = (data.web && Array.isArray(data.web.results)) ? data.web.results : [];
-  return items.slice(0, MAX_SNIPPETS * 2).map(r => ({
-    title: stripTags(r.title || ''),
+  return items.slice(0, MAX_SNIPPETS).map(r => ({
     url: String(r.url || ''),
-    snippet: stripTags(r.description || '').slice(0, 300)
-  })).filter(r => r.title && r.url);
+    title: String(r.title || '').slice(0, 200),
+    snippet: String(r.description || '').slice(0, 300)
+  }));
 }
 
 // Резервный путь: парсинг HTML-выдачи без ключа
@@ -179,25 +204,45 @@ async function braveHtmlSearch(query) {
     headers: { 'User-Agent': UA, 'Accept-Language': 'ru,en;q=0.8' },
     signal: AbortSignal.timeout(FETCH_TIMEOUT)
   });
-  if (!res.ok) throw new Error(`поиск недоступен (HTTP ${res.status})`);
+  if (!res.ok) throw new Error('Brave HTML поиск недоступен (HTTP ' + res.status + ')');
   const html = await res.text();
 
   const rawResults = [];
-  // Веб-результаты Brave: блоки class="result-content ..." со ссылкой и заголовком внутри.
   const chunks = html.split(/class="result-content[ "]/).slice(1);
   for (const chunk of chunks) {
-    if (rawResults.length >= MAX_SNIPPETS * 3) break;
-    const linkMatch = chunk.match(/<a[^>]+href="(https?:\/\/[^"]+)"/);
+    const linkMatch = chunk.match(/href="(https?:\/\/[^ "]+)"[^>]*>\s*<span[^>]*>\s*<img/);
     if (!linkMatch) continue;
     const url = decodeEntities(linkMatch[1]);
     if (/imgs\.search\.brave\.com|search\.brave\.com/.test(url)) continue;
     const titleMatch = chunk.match(/class="title[^"]*"[^>]*>([\s\S]*?)<\/div>/);
     const title = titleMatch ? stripTags(titleMatch[1]) : '';
-    if (!title) continue;
-    const snipMatch = chunk.match(/clamp-dynamic[^>]*>([\s\S]*?)<\/div>/);
-    rawResults.push({ title, url, snippet: snipMatch ? stripTags(snipMatch[1]).slice(0, 300) : '' });
+    const snipMatch = chunk.match(/class="description[^"]*"[^>]*>([\s\S]*?)<\/div>/);
+    const snippet = snipMatch ? stripTags(snipMatch[1]).slice(0, 300) : '';
+    rawResults.push({ url, title, snippet });
   }
-  return rawResults;
+  return rawResults.slice(0, MAX_SNIPPETS);
+}
+
+// Финализация: фильтрация, дедупликация, формирование ответа
+function finalizeSearch(query, rawResults) {
+  const seen = new Set();
+  const filtered = rawResults.filter(r => {
+    if (!r.url || !r.url.startsWith('http') || isBlockedSite(r.url)) return false;
+    try { const u = new URL(r.url); if (seen.has(u.hostname)) return false; seen.add(u.hostname); } catch (_) { return false; }
+    return true;
+  }).slice(0, MAX_SNIPPETS);
+
+  if (!filtered.length) {
+    return { query, results: [], answer: t('web.noResults') || 'Ничего не найдено по запросу: ' + query };
+  }
+  const sources = filtered.map((r, i) => (i+1) + '. [' + r.title + '](' + r.url + ') \u2014 ' + r.snippet).join('\n')('\n');
+  const answer = t('web.searchAnswer') || 'Вот что я нашёл:';
+  return {
+    query,
+    results: filtered,
+    answer: answer + '\n\n' + sources,
+    sourceCount: filtered.length
+  };
 }
 
 async function webSearch(query) {
@@ -208,45 +253,67 @@ async function webSearch(query) {
     return cached.result;
   }
 
-  let rawResults;
-  if (BRAVE_API_KEY) {
-    try {
-      rawResults = await braveApiSearch(query);
-    } catch (e) {
-      log.warn('[web] Brave API не сработал (' + e.message + ') — пробую HTML-выдачу');
-      rawResults = null;
+  let rawResults = [];
+  const mode = SEARCH_MODE;
+  const hasKey = !!SEARCH_API_KEY;
+
+  try {
+    if (mode === 'ddg') {
+      rawResults = await ddgHtmlSearch(query);
+    } else if (mode === 'tavily') {
+      if (!hasKey) throw new Error('нужен ключ Tavily');
+      rawResults = await tavilySearch(query);
+    } else if (mode === 'google') {
+      if (!hasKey) throw new Error('нужен ключ Google Custom Search');
+      rawResults = await googleSearch(query);
+    } else if (mode === 'brave') {
+      if (!hasKey) {
+        log.warn('[web] режим Brave без ключа — переключаюсь на HTML-парсинг');
+        rawResults = await braveHtmlSearch(query);
+      } else {
+        rawResults = await braveApiSearch(query);
+      }
+    } else {
+      // Неизвестный режим — DuckDuckGo
+      rawResults = await ddgHtmlSearch(query);
     }
+  } catch (e) {
+    log.warn('[web] поиск ' + mode + ' не сработал (' + e.message + ') — DuckDuckGo в резерв');
+    rawResults = await ddgHtmlSearch(query);
   }
-  if (!rawResults) rawResults = await braveHtmlSearch(query);
-  return finalizeSearch(query, rawResults);
+
+  const result = finalizeSearch(query, rawResults);
+
+  if (searchCache.size >= SEARCH_CACHE_MAX) {
+    const oldest = [...searchCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+    searchCache.delete(oldest[0]);
+  }
+  searchCache.set(key, { ts: Date.now(), result });
+  return result;
 }
 
-// Чтение страницы: убираем скрипты/стили/теги, оставляем текст.
-// Если страница не открылась напрямую (блокировка провайдера — например YouTube
-// в РФ, бот-защита, региональные ограничения) — автоматически пробуем прокси-
-// читалку r.jina.ai: она не заблокирована и возвращает текст страницы, включая
-// мета-данные YouTube-каналов (название, описание, дата создания — «Joined»).
+// Чтение страницы
 async function fetchViaReader(url) {
   const res = await doFetch('https://r.jina.ai/' + url, {
     headers: { 'User-Agent': UA, 'Accept': 'text/plain' },
     redirect: 'follow',
     signal: AbortSignal.timeout(FETCH_TIMEOUT * 2)
   });
-  if (!res.ok) throw new Error(`прокси-читалка недоступна (HTTP ${res.status})`);
+  if (!res.ok) throw new Error('прокси-читалка недоступна (HTTP ' + res.status + ')');
   const text = String(await res.text()).trim();
-  if (!text) throw new Error('прокси-читалка вернула пустой текст');
+  if (!text) throw new Error(t('ocr.emptyText'));
   return text;
 }
 
 async function fetchPage(url) {
-  if (!(await isSafeUrl(url))) return 'Ошибка: этот адрес открывать нельзя (только публичные http/https)';
-  if (isBlockedSite(url)) return 'Ошибка: этот сайт в чёрном списке настроек и открывать его нельзя.';
+  if (!(await isSafeUrl(url))) return t('web.error.unsafeUrl');
+  if (isBlockedSite(url)) return t('web.error.blockedSite');
 
   let text = '';
   let viaReader = false;
   try {
     const res = await doFetch(url, { headers: { 'User-Agent': UA }, redirect: 'follow', signal: AbortSignal.timeout(FETCH_TIMEOUT) });
-    if (!res.ok) throw new Error(`страница недоступна (HTTP ${res.status})`);
+    if (!res.ok) throw new Error('страница недоступна (HTTP ' + res.status + ')');
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('text/') || contentType.includes('json') || contentType.includes('xml')) {
       const html = await res.text();
@@ -257,13 +324,12 @@ async function fetchPage(url) {
           .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
       );
     } else {
-      log.info(`[web] не текстовый контент (${contentType.split(';')[0]}) — пробую прокси-читалку`);
+      log.info('[web] не текстовый контент (' + contentType.split(';')[0] + ') — пробую прокси-читалку');
     }
   } catch (e) {
-    log.info(`[web] прямая загрузка не удалась (${e.message}) — пробую прокси-читалку r.jina.ai`);
+    log.info('[web] прямая загрузка не удалась (' + e.message + ') — пробую прокси-читалку r.jina.ai');
   }
 
-  // Резервный путь: прокси-читалка (обходит сетевые блокировки вроде YouTube в РФ)
   if (!text) {
     try {
       text = await fetchViaReader(url);
@@ -275,9 +341,9 @@ async function fetchPage(url) {
   }
 
   if (!text) return 'Страница пустая или состоит только из скриптов.';
-  const prefix = viaReader ? '(получено через прокси-читалку r.jina.ai — прямой доступ к сайту заблокирован)\n\n' : '';
-  log.info(`[web] получено ${Math.min(text.length, PAGE_LIMIT)} символов с ${new URL(url).hostname}${viaReader ? ' (через читалку)' : ''}`);
+  const prefix = viaReader ? '(получено через прокси-читалку r.jina.ai)\n\n' : '';
+  log.info('[web] получено ' + Math.min(text.length, PAGE_LIMIT) + ' символов с ' + new URL(url).hostname + (viaReader ? ' (через читалку)' : ''));
   return prefix + text.slice(0, PAGE_LIMIT) + (text.length > PAGE_LIMIT ? '\n…[текст обрезан]' : '');
 }
 
-module.exports = { webSearch, fetchPage, setBlockedSites, setBraveApiKey };
+module.exports = { webSearch, fetchPage, setBlockedSites, setSearchMode, setSearchApiKey };

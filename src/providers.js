@@ -96,6 +96,8 @@ const PROVIDERS = {
       'nvidia/nemotron-3.5-lightning:free',
       'poolside/laguna-s-2.1:free',
       'inclusionai/ling-3.0-flash-fin:free',
+      'minimax/minimax-m3:free',
+      'google/gemma-4-31b-it:free',
       // Платные модели
       'openai/gpt-6-astra:batch',
       'openai/gpt-6-astra',
@@ -107,7 +109,9 @@ const PROVIDERS = {
     freeModels: [
       'nvidia/nemotron-3.5-lightning:free',
       'poolside/laguna-s-2.1:free',
-      'inclusionai/ling-3.0-flash-fin:free'
+      'inclusionai/ling-3.0-flash-fin:free',
+      'minimax/minimax-m3:free',
+      'google/gemma-4-31b-it:free'
     ],
     chatUrl: 'https://openrouter.ai/api/v1/chat/completions',
     supportsTools: true,

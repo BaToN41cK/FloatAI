@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('api', {
   newSession: () => ipcRenderer.invoke('chat:newSession'),
   switchSession: (id) => ipcRenderer.invoke('chat:switchSession', id),
   deleteSession: (id) => ipcRenderer.invoke('chat:deleteSession', id),
+  // Список сессий изменился (например, модель сгенерировала название нового диалога)
+  onSessionsUpdated: (cb) => ipcRenderer.on('chat:sessions-updated', (_e, list) => cb(list)),
 
   // Настройки (UI, Ctrl+O)
   getSettings: () => ipcRenderer.invoke('settings:get'),

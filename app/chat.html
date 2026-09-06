@@ -221,9 +221,18 @@
           <input type="password" id="setApiKey" placeholder="Вставь ключ сюда" autocomplete="off" />
           <small class="field-hint">Ключ даёт доступ, но не определяет модель. Модель выбирается отдельно.</small>
         </label>
-        <label>Ключ Brave Search API (необязательно)
-          <input type="password" id="setBraveKey" placeholder="BSA..." autocomplete="off" />
-          <small class="field-hint">Получи бесплатно на brave.com/search/api (2000 запросов/мес). С ключом — официальный API, без ключа — разбор HTML-выдачи.</small>
+        <label>Режим поиска
+          <select id="setSearchMode">
+            <option value="ddg">DuckDuckGo (бесплатный, без ключа)</option>
+            <option value="tavily">Tavily (бесплатный ключ, 1000/мес)</option>
+            <option value="google">Google CSE (бесплатный ключ, 100/день)</option>
+            <option value="brave">Brave Search (ключ, 2000/мес)</option>
+          </select>
+          <small class="field-hint">DuckDuckGo работает сразу без ключа. Tavily, Google и Brave — требуют бесплатный ключ.</small>
+        </label>
+        <label id="searchApiKeyLabel" style="display:none">Ключ поискового API
+          <input type="password" id="setSearchApiKey" placeholder="Вставь ключ сюда" autocomplete="off" />
+          <small class="field-hint" id="searchApiKeyHint"></small>
         </label>
         </div>
         </div>

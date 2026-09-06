@@ -24,6 +24,24 @@ export function initSettings() {
     updateOllamaVisibility();
   }
 
+  // --- Показ/скрытие поля API-ключа для режима поиска ---
+  function updateSearchModeVisibility() {
+    const mode = $('setSearchMode').value;
+    const needsKey = mode === 'tavily' || mode === 'google' || mode === 'brave';
+    const label = $('searchApiKeyLabel');
+    if (label) label.style.display = needsKey ? '' : 'none';
+    // Подсказка для выбранного режима
+    const hint = $('searchApiKeyHint');
+    if (hint) {
+      const hints = {
+        tavily: 'Tavily API Key (1000 запросов/мес бесплатно)',
+        google: 'Google CSE API Key (100 запросов/день бесплатно)',
+        brave: 'Brave Search API Key (2000 запросов/мес бесплатно)',
+      };
+      hint.textContent = hints[mode] || '';
+    }
+  }
+
   // --- Менеджер локальных моделей Ollama (виден только для провайдера Ollama) ---
   function formatSize(bytes) {
     const gb = bytes / (1024 * 1024 * 1024);
@@ -202,41 +220,64 @@ export function initSettings() {
     // Ключ подставляется per-провайдер: каждый провайдер помнит свой ключ
     _lastSettings = s;
     $('setApiKey').value = (s.providerKeys && s.providerKeys[$('setProvider').value]) || s.apiKey || '';
-    $('setBraveKey').value = s.braveApiKey || '';
     $('setCustomEndpoint').value = s.customEndpoint || '';
     $('setProxy').value = s.proxy || '';
     $('setBlocked').value = s.blockedSites || '';
-    $('setAutostart').checked = !!s.autostart;
+    $('setAutostart').checked = s.autostart !== false;
     $('setTheme').value = s.theme || 'dark';
     $('setDebug').checked = !!s.debug;
     $('setOpacity').value = Math.round((s.opacity ?? 1) * 100);
     $('setFontSize').value = s.fontSize || 13;
-    $('setDeepThink').checked = !!s.deepThink;
+    // Reasoning Effort: миграция с deepThink (boolean) → reasoningEffort (string)
+    // deepThink: true → "high-high", deepThink: false → "low"
+    const effort = s.reasoningEffort || (s.deepThink ? 'high-high' : 'low');
+    $('setDeepThink').checked = (effort === 'high-high' || effort === 'high');
     $('setLanguage').value = s.language || 'ru';
     $('setWebSearch').checked = s.plugins?.webSearch !== false;
+    $('setSearchMode').value = s.searchMode || 'ddg';
+    updateSearchModeVisibility();
     $('setFetchPage').checked = s.plugins?.fetchPage !== false;
     applyFontSize(s.fontSize || 13);
     applyLang(s.language || 'ru'); // перевести панель настроек на выбранный язык
   }
   $('btnSettings').addEventListener('click', openSettings);
   $('settingsClose').addEventListener('click', () => $('settingsPanel').classList.remove('open'));
+  $('setSearchMode').addEventListener('change', updateSearchModeVisibility);
   $('setProvider').addEventListener('change', () => {
-    updateModelOptions($('setProvider').value);
-    updateAutoVisibility();
-    // Переключили провайдера — подставляем его сохранённый ключ
+    const newProvider = $('setProvider').value;
     const s = _lastSettings || {};
-    $('setApiKey').value = (s.providerKeys && s.providerKeys[$('setProvider').value]) || '';
+
+    // Сохраняем текущую модель для предыдущего провайдера (как в Cline)
+    const prevProvider = s.provider;
+    if (prevProvider && prevProvider !== newProvider && s.providerModels) {
+      s.providerModels[prevProvider] = $('setModel').value;
+    }
+
+    // Обновляем список моделей для нового провайдера
+    updateModelOptions(newProvider);
+    updateAutoVisibility();
+
+    // Восстанавливаем последнюю выбранную модель для этого провайдера
+    const savedModel = s.providerModels && s.providerModels[newProvider];
+    if (savedModel && MODEL_OPTIONS[newProvider] && MODEL_OPTIONS[newProvider].includes(savedModel)) {
+      $('setModel').value = savedModel;
+    }
+
+    // Переключили провайдера — подставляем его сохранённый ключ
+    $('setApiKey').value = (s.providerKeys && s.providerKeys[newProvider]) || '';
   });
   $('btnSaveSettings').addEventListener('click', async () => {
     let res;
     try {
       const personalityResult = await window.api.savePersonality($('personalityEditor').value);
+      // Вычисляем reasoningEffort: галочка вкл = "High-High", выкл = "Low"
+      const reasoningEffort = $('setDeepThink').checked ? 'high-high' : 'low';
+
       res = await window.api.saveSettings({
         provider: $('setProvider').value,
         // Auto: модель и ключ встроены — сохраняем плейсхолдеры, а не значения полей
         model: $('setProvider').value === 'auto' ? 'command-a-03-2025' : $('setModel').value.trim(),
         apiKey: $('setProvider').value === 'auto' ? '' : $('setApiKey').value.trim(),
-        braveApiKey: $('setBraveKey').value.trim(),
         voiceEnabled: $('setVoiceEnabled').checked,
         customEndpoint: $('setCustomEndpoint').value.trim(),
         proxy: $('setProxy').value.trim(),
@@ -246,9 +287,18 @@ export function initSettings() {
         debug: $('setDebug').checked,
         opacity: Number($('setOpacity').value) / 100,
         fontSize: Number($('setFontSize').value),
-        deepThink: $('setDeepThink').checked,
+        // Reasoning Effort вместо deepThink: "low" | "high" | "high-high"
+        reasoningEffort: reasoningEffort,
+        deepThink: $('setDeepThink').checked, // для обратной совместимости
+        // Сохраняем последнюю модель для каждого провайдера
+        providerModels: {
+          ...((_lastSettings && _lastSettings.providerModels) || {}),
+          [$('setProvider').value]: $('setProvider').value === 'auto' ? 'command-a-03-2025' : $('setModel').value.trim()
+        },
         language: $('setLanguage').value,
-        plugins: { webSearch: $('setWebSearch').checked, fetchPage: $('setFetchPage').checked }
+        plugins: { webSearch: $('setWebSearch').checked, fetchPage: $('setFetchPage').checked },
+      searchMode: $('setSearchMode').value,
+      searchApiKey: $('setSearchApiKey').value
       });
       store.state.voiceEnabled = !!res.voiceEnabled; // мгновенно показать/спрятать 🎙
       $('personalityStatus').textContent = personalityResult.warnings.length
@@ -302,3 +352,24 @@ export function initSettings() {
 
   return { setLoader, refreshSessions, openSettings };
 }
+
+// Глобальный слушатель: main присылает обновлённый список сессий
+// (например, после того как модель сгенерировала название нового диалога).
+// Дёргаем refreshSessions через объект настроек — он у нас singleton-стиль,
+// но безопаснее всего просто вызвать getSessions и обновить DOM напрямую.
+window.api.onSessionsUpdated((list) => {
+  const listEl = $('sessionsList');
+  if (!listEl) return;
+  // Лёгкое обновление без полного перерендера панели: пересоберём элементы.
+  // (Полный refresh делает refreshSessions() — но он доступен только через initSettings,
+  //  поэтому используем простую перерисовку списка.)
+  listEl.innerHTML = '';
+  for (const s of list) {
+    const item = document.createElement('div');
+    item.className = 'session-item' + (s.active ? ' active' : '');
+    item.textContent = s.title;
+    item.dataset.id = s.id;
+    item.addEventListener('click', () => window.api.switchSession(s.id).then(() => window.location.reload()));
+    listEl.appendChild(item);
+  }
+});

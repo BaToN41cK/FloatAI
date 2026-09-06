@@ -73,11 +73,12 @@ if (app.isPackaged) {
 }
 
 // --- Настройки из UI: применяем заблокированные сайты и TTL логов ---
-const { setBlockedSites, setBraveApiKey } = require('./src/web-tools');
+const { setBlockedSites, setSearchMode, setSearchApiKey } = require('./src/web-tools');
 const { getProvider } = require('./src/providers');
 const loaded = settings.load();
 setBlockedSites(loaded.blockedSites);
-setBraveApiKey(loaded.braveApiKey);
+setSearchMode(loaded.searchMode || 'ddg');
+  setSearchApiKey(loaded.searchApiKey || '');
 log.setLogTtl(loaded.logTtlDays);
 
 // Поддержка прокси (обход сброса больших запросов провайдером):
@@ -575,8 +576,10 @@ ipcMain.handle('settings:set', (_e, partial) => {
     }
     rateLimitCooldowns.delete(saved.provider);
   }
-  if ('deepThink' in (partial || {}) || 'language' in (partial || {})) {
-    mistral.setOptions({ deepThink: saved.deepThink, language: saved.language });
+  if ('reasoningEffort' in (partial || {}) || 'deepThink' in (partial || {}) || 'language' in (partial || {})) {
+    // Миграция: deepThink boolean → reasoningEffort string
+    const effort = saved.reasoningEffort || (saved.deepThink ? 'high-high' : 'low');
+    mistral.setOptions({ reasoningEffort: effort, deepThink: effort !== 'low', language: saved.language });
   }
   if ('apiKey' in (partial || {}) && !isAuto) {
     // Ключ запоминается per-провайдер: при переключении подставится сам
@@ -587,7 +590,8 @@ ipcMain.handle('settings:set', (_e, partial) => {
   if ('plugins' in (partial || {})) mistral.setPlugins(saved.plugins);
   if ('customEndpoint' in (partial || {})) mistral.customEndpoint = saved.customEndpoint;
   if ('blockedSites' in (partial || {})) setBlockedSites(saved.blockedSites);
-  if ('braveApiKey' in (partial || {})) setBraveApiKey(saved.braveApiKey);
+  if ('searchMode' in (partial || {})) setSearchMode(partial.searchMode);
+    if ('searchApiKey' in (partial || {})) setSearchApiKey(partial.searchApiKey);
   if ('autostart' in (partial || {})) applyAutostart(saved.autostart);
   if ('logTtlDays' in (partial || {})) log.setLogTtl(saved.logTtlDays);
   if ('opacity' in (partial || {}) && chatWindow) {

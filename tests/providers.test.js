@@ -91,7 +91,7 @@ test('глубокое размышление снимает ограничен�
   assert.ok(request.body.max_tokens > 1000, 'полный лимит модели');
   const instructions = buildExtraInstructions(true, 8192, { webSearch: false, fetchPage: false });
   assert.match(instructions, /Ограничений на длину ответа НЕТ/);
-  assert.match(instructions, /Режим глубокого размышления/);
+  assert.match(instructions, /Глубокое размышление/);
 });
 
 test('ограничивает вывод Mistral лимитом модели', () => {

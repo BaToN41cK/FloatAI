@@ -18,6 +18,8 @@ export const MODEL_OPTIONS = {
     'nvidia/nemotron-3.5-lightning:free',
     'poolside/laguna-s-2.1:free',
     'inclusionai/ling-3.0-flash-fin:free',
+    'minimax/minimax-m3:free',
+    'google/gemma-4-31b-it:free',
     'openai/gpt-6-astra:batch',
     'openai/gpt-6-astra',
     'qwen/qwen3.8-max-0902',
@@ -37,7 +39,8 @@ export const FREE_MODELS = new Set([
   // Auto (служебная облачная модель — ключ встроен, пользователю не нужен)
   'command-a-03-2025',
   // OpenRouter бесплатные
-  'nvidia/nemotron-3.5-lightning:free', 'poolside/laguna-s-2.1:free', 'inclusionai/ling-3.0-flash-fin:free'
+  'nvidia/nemotron-3.5-lightning:free', 'poolside/laguna-s-2.1:free', 'inclusionai/ling-3.0-flash-fin:free',
+  'minimax/minimax-m3:free', 'google/gemma-4-31b-it:free'
 ]);
 
 export function updateModelOptions(provider, selected) {

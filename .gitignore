@@ -6,3 +6,4 @@ config/personality.md
 app/vendor/transformers.min.js
 app/vendor/onnx/
 app/js/stt-vendor-entry.js
+logs/.vault.json
