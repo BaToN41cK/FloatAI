@@ -174,81 +174,124 @@
         </nav>
         <div class="settings-pages">
         <div class="settings-page active" data-page="general">
-        <div class="settings-form">
-        <label>Провайдер
-          <select id="setProvider">
-            <option value="mistral">Mistral (free tier)</option>
-            <option value="openai">OpenAI</option>
-            <option value="anthropic">Anthropic</option>
-            <option value="google">Google</option>
-            <option value="gigachat">GigaChat (free tier)</option>
-            <option value="yandex">YandexGPT / Алиса (free tier)</option>
-            <option value="custom">Свой OpenAI-совместимый</option>
-            <option value="ollama">Ollama (локально)</option>
-            <option value="lmstudio">LM Studio (локально)</option>
-            <option value="zai">Z.ai (есть free)</option>
-            <option value="openrouter">OpenRouter (free и paid)</option>
-            <option value="auto">Auto (готово из коробки)</option>
-          </select>
-        </label>
-        <label>Модель
-          <select id="setModel"></select>
-        </label>
-        <div id="ollamaSection" style="display:none; grid-column:1/-1; margin-top:4px">
-          <b style="font-size:12px">Локальные модели (Ollama)</b>
-          <div id="ollamaList" style="max-height:120px; overflow-y:auto; margin:6px 0; font-size:12px"></div>
-          <div style="display:flex; gap:6px">
-            <input type="text" id="ollamaModel" placeholder="имя модели, например qwen2.5:7b" style="flex:1; min-width:0" />
-            <button id="btnOllamaPull" class="panel-btn">Скачать</button>
+          <!-- API Configuration (Cline-style) -->
+          <div class="api-config">
+            <!-- Provider Section -->
+            <div class="section-title">API Provider</div>
+            <div class="provider-card" id="providerCard">
+              <div class="provider-card-header">
+                <span class="provider-card-title" id="providerTitle">Auto</span>
+                <div class="provider-card-badges" id="providerBadges">
+                  <span class="badge badge-recommended">Recommended</span>
+                </div>
+              </div>
+              <div class="provider-card-desc" id="providerDesc">Работает из коробки без API-ключа</div>
+            </div>
+            <select id="setProvider" class="provider-select">
+              <option value="auto">Auto (готово из коробки)</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="google">Google</option>
+              <option value="mistral">Mistral</option>
+              <option value="zai">Z.ai</option>
+              <option value="cohere">Cohere</option>
+              <option value="cerebras">Cerebras</option>
+              <option value="gigachat">GigaChat</option>
+              <option value="yandex">YandexGPT / Алиса</option>
+              <option value="ollama">Ollama (локально)</option>
+              <option value="lmstudio">LM Studio (локально)</option>
+              <option value="custom">Свой OpenAI-совместимый</option>
+            </select>
+
+            <!-- Billing Row -->
+            <div class="billing-row" id="billingRow" style="display:none">
+              <span id="billingText">Подключите провайдера для доступа к моделям</span>
+              <a class="subscription-link" id="subscriptionLink" style="display:none">Попробовать бесплатно →</a>
+            </div>
+
+            <!-- API Key -->
+            <div class="section-title" id="apiKeyLabel">API Key</div>
+            <input type="password" id="setApiKey" class="api-key-input" placeholder="Вставьте API-ключ сюда" autocomplete="off" />
+            <div class="field-hint" id="apiKeyHint">Ключ даёт доступ к провайдеру. Модель выбирается отдельно.</div>
+
+            <!-- Ollama Manager -->
+            <div id="ollamaSection" style="display:none; margin-top:10px">
+              <div class="ollama-manager">
+                <b style="font-size:12px">Локальные модели (Ollama)</b>
+                <div id="ollamaList" style="max-height:120px; overflow-y:auto; margin:6px 0; font-size:12px"></div>
+                <div style="display:flex; gap:6px">
+                  <input type="text" id="ollamaModel" placeholder="имя модели, например qwen2.5:7b" style="flex:1; min-width:0" />
+                  <button id="btnOllamaPull" class="panel-btn">Скачать</button>
+                </div>
+                <small id="ollamaStatus" class="field-hint"></small>
+              </div>
+            </div>
+
+            <!-- Model Section -->
+            <div class="section-title">Model</div>
+            <select id="setModel" class="model-select"></select>
+
+            <!-- Model Description Card -->
+            <div class="provider-card" id="modelCard" style="margin-top:8px">
+              <div class="provider-card-header">
+                <span class="provider-card-title" id="modelTitle">command-a-03-2025</span>
+                <div class="provider-card-badges" id="modelBadges">
+                  <span class="badge badge-free">FREE</span>
+                </div>
+              </div>
+              <div class="provider-card-desc" id="modelDesc">Быстрая и эффективная модель с контекстным окном 1M</div>
+              <div class="model-info-bar" id="modelInfoBar">
+                <div class="model-info-item">
+                  <span class="label">Context:</span>
+                  <span class="value" id="modelContext">1.0M</span>
+                </div>
+                <div class="model-info-item">
+                  <span class="label">Input:</span>
+                  <span class="value" id="modelInputPrice">Free</span>
+                </div>
+                <div class="model-info-item">
+                  <span class="label">Output:</span>
+                  <span class="value" id="modelOutputPrice">Free</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Reasoning Effort -->
+            <div class="section-title">Reasoning Effort</div>
+            <div class="reasoning-slider">
+              <span class="slider-label">Low</span>
+              <input type="range" id="reasoningEffortSlider" min="0" max="2" step="1" value="0" />
+              <span class="slider-value" id="reasoningEffortValue">Low</span>
+            </div>
+            <div class="field-hint" style="margin-top:4px">Высокий уровень улучшает глубину мышления, но использует больше токенов.</div>
+
+            <!-- Language -->
+            <div class="section-title">Язык интерфейса</div>
+            <select id="setLanguage" class="provider-select" style="margin-top:4px">
+              <option value="ru">Русский</option>
+              <option value="en">English</option>
+              <option value="zh">中文 (китайский)</option>
+              <option value="de">Deutsch (немецкий)</option>
+              <option value="es">Español (испанский)</option>
+              <option value="fr">Français (французский)</option>
+            </select>
+            <div class="field-hint">На каком языке показываются подписи и кнопки этого окна.</div>
           </div>
-          <small id="ollamaStatus" class="field-hint"></small>
-        </div>
-        <label class="checkbox-row">
-          <input type="checkbox" id="setDeepThink" /> Глубокое размышление (думает дольше)
-        </label>
-        <label>Язык интерфейса
-          <select id="setLanguage">
-            <option value="ru">Русский</option>
-            <option value="en">English</option>
-            <option value="zh">中文 (китайский)</option>
-            <option value="de">Deutsch (немецкий)</option>
-            <option value="es">Español (испанский)</option>
-            <option value="fr">Français (французский)</option>
-          </select>
-          <small class="field-hint">На каком языке показываются подписи и кнопки этого окна.</small>
-        </label>
-        <label>API-ключ выбранного провайдера
-          <input type="password" id="setApiKey" placeholder="Вставь ключ сюда" autocomplete="off" />
-          <small class="field-hint">Ключ даёт доступ, но не определяет модель. Модель выбирается отдельно.</small>
-        </label>
-        <label>Режим поиска
-          <select id="setSearchMode">
-            <option value="ddg">DuckDuckGo (бесплатный, без ключа)</option>
-            <option value="tavily">Tavily (бесплатный ключ, 1000/мес)</option>
-            <option value="google">Google CSE (бесплатный ключ, 100/день)</option>
-            <option value="brave">Brave Search (ключ, 2000/мес)</option>
-          </select>
-          <small class="field-hint">DuckDuckGo работает сразу без ключа. Tavily, Google и Brave — требуют бесплатный ключ.</small>
-        </label>
-        <label id="searchApiKeyLabel" style="display:none">Ключ поискового API
-          <input type="password" id="setSearchApiKey" placeholder="Вставь ключ сюда" autocomplete="off" />
-          <small class="field-hint" id="searchApiKeyHint"></small>
-        </label>
-        </div>
         </div>
         <div class="settings-page" data-page="personality">
-        <div class="personality-editor">
-          <div class="personality-header">
-            <label class="personality-label" for="personalityEditor">Личность агента</label>
-            <span id="personalityCounter" class="personality-counter"></span>
-          </div>
-          <textarea id="personalityEditor" spellcheck="false"></textarea>
-          <small class="field-hint">Это системный prompt агента (всегда подключён к диалогу). Не добавляй API-ключи, пароли и другие секреты.</small>
-          <div class="personality-toolbar">
+          <div class="settings-form">
+          <label>Личность агента (системный промпт)
+            <textarea id="personalityEditor" class="personality-editor" placeholder="Опиши, кем будет являться ассистент и как стоит общаться с тобой..."></textarea>
+            <div class="personality-counter" id="personalityCounter">0 / 5000</div>
+            <small class="field-hint">На каком языке писать, какой стиль общения, в каких ситуациях отказывать.</small>
+          </label>
+          <div style="display:flex; gap:6px; margin-top:6px">
+            <button id="btnPersonalitySave" class="panel-btn">Сохранить</button>
             <button id="btnPersonalityReset" class="panel-btn">Сбросить</button>
             <span id="personalityStatus" class="settings-status"></span>
           </div>
-        </div>
+          </div>
         </div>
         <div class="settings-page" data-page="appearance">
         <div class="settings-form">

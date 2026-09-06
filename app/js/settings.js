@@ -1,11 +1,54 @@
 // Панель настроек (Ctrl+O), сессии (диалоги) и диагностика.
 import { $, applyTheme, applyFontSize } from './ui.js';
-import { updateModelOptions } from './models.js';
+import { updateModelOptions, MODEL_OPTIONS, FREE_MODELS, detectProvider } from './models.js';
 import { applyLang, t } from './i18n.js';
 import { store } from './store.js';
 
 const MAX_PERSONALITY_CHARS = 5000;
-let _lastSettings = null; // последние загруженные настройки (для подстановки ключей)
+let _lastSettings = null;
+
+const PROVIDER_INFO = {
+  auto: { title: 'Auto', desc: 'Работает из коробки без API-ключа', badges: [{ type: 'recommended', text: 'Recommended' }, { type: 'free', text: 'Free' }], needsKey: false },
+  openrouter: { title: 'OpenRouter', desc: 'Единый доступ к 200+ моделям от разных провайдеров', badges: [], needsKey: true, signupUrl: 'https://openrouter.ai/keys' },
+  openai: { title: 'OpenAI', desc: 'GPT-4.1, GPT-4o, o3 — мощные модели для кодинга', badges: [{ type: 'paid', text: 'Paid' }], needsKey: true, signupUrl: 'https://platform.openai.com/api-keys' },
+  anthropic: { title: 'Anthropic', desc: 'Claude 4 — продвинутое рассуждение и безопасность', badges: [{ type: 'paid', text: 'Paid' }], needsKey: true, signupUrl: 'https://console.anthropic.com/settings/keys' },
+  google: { title: 'Google', desc: 'Gemini 2.5 — мультимодальные модели от Google', badges: [], needsKey: true, signupUrl: 'https://aistudio.google.com/apikey' },
+  mistral: { title: 'Mistral', desc: 'Mistral Large, Codestral — быстрые европейские модели', badges: [], needsKey: true, signupUrl: 'https://console.mistral.ai/api-keys/' },
+  zai: { title: 'Z.ai', desc: 'GLM-5 — новейшая мультимодальная модель с бесплатным тарифом', badges: [{ type: 'free', text: 'Free Models' }], needsKey: true, signupUrl: 'https://api.z.ai' },
+  cohere: { title: 'Cohere', desc: 'Command A — модель с контекстом 128K, бесплатный тариф', badges: [{ type: 'free', text: 'Free' }], needsKey: true, signupUrl: 'https://dashboard.cohere.com/api-keys' },
+  cerebras: { title: 'Cerebras', desc: 'Сверхбыстрый вывод. Бесплатный API-тариф', badges: [{ type: 'free', text: 'Free' }], needsKey: true, signupUrl: 'https://cloud.cerebras.ai/api-keys' },
+  gigachat: { title: 'GigaChat', desc: 'Модели Сбера для русскоязычных задач', badges: [], needsKey: true, signupUrl: 'https://developers.sber.ru/' },
+  yandex: { title: 'YandexGPT / Алиса', desc: 'YandexGPT 5 — модели Яндекса для русского языка', badges: [], needsKey: true, signupUrl: 'https://yandex.cloud/ru/services/yandexgpt' },
+  ollama: { title: 'Ollama (локально)', desc: 'Запускает модели локально на вашем компьютере', badges: [{ type: 'local', text: 'Local' }, { type: 'free', text: 'Free' }], needsKey: false },
+  lmstudio: { title: 'LM Studio (локально)', desc: 'Локальный сервер моделей через LM Studio', badges: [{ type: 'local', text: 'Local' }, { type: 'free', text: 'Free' }], needsKey: false },
+  custom: { title: 'Свой OpenAI-совместимый', desc: 'Подключите любой OpenAI-совместимый API', badges: [], needsKey: true },
+};
+
+const MODEL_INFO = {
+  'command-a-03-2025': { desc: 'Быстрая и эффективная модель с большим контекстом', context: '128K', input: 'Free', output: 'Free' },
+  'GLM-5.3-Flash': { desc: 'Новейшая мультимодальная модель из серии GLM-5', context: '128K', input: 'Free', output: 'Free' },
+  'GLM-4.5-Flash': { desc: 'Быстрая и бесплатная модель Z.ai', context: '128K', input: 'Free', output: 'Free' },
+  'gpt-4.1': { desc: 'Самая мощная модель OpenAI для кодинга', context: '1M', input: 'Paid', output: 'Paid' },
+  'gpt-4o': { desc: 'Баланс скорости и качества. Универсальная модель', context: '128K', input: 'Paid', output: 'Paid' },
+  'claude-opus-4-1': { desc: 'Самая мощная модель Anthropic для сложных задач', context: '200K', input: 'Paid', output: 'Paid' },
+  'claude-sonnet-4-20250514': { desc: 'Быстрая и умная модель Anthropic', context: '200K', input: 'Paid', output: 'Paid' },
+  'gemini-2.5-pro': { desc: 'Самая мощная модель Google с длинным контекстом', context: '1M', input: 'Paid', output: 'Paid' },
+  'gemini-2.5-flash': { desc: 'Быстрая модель Google для повседневных задач', context: '1M', input: 'Paid', output: 'Paid' },
+  'poolside/laguna-s-2.1:free': { desc: 'Модель для кода от Poolside. Бесплатно', context: '32K', input: 'Free', output: 'Free' },
+  'nvidia/nemotron-3.5-lightning:free': { desc: 'Быстрая модель NVIDIA для кодинга', context: '128K', input: 'Free', output: 'Free' },
+  'mistral-large-latest': { desc: 'Самая мощная модель Mistral', context: '128K', input: 'Paid', output: 'Paid' },
+  'mistral-small-latest': { desc: 'Быстрая и бесплатная модель Mistral', context: '32K', input: 'Free', output: 'Free' },
+  'llama3.2': { desc: 'Модель Meta Llama 3.2 для диалогов и кодинга', context: '128K', input: 'Free', output: 'Free' },
+  'qwen2.5': { desc: 'Модель Qwen 2.5 от Alibaba для кодинга', context: '32K', input: 'Free', output: 'Free' },
+};
+
+function getModelInfo(modelName) {
+  if (MODEL_INFO[modelName]) return MODEL_INFO[modelName];
+  if (FREE_MODELS.has(modelName) || modelName.endsWith(':free')) {
+    return { desc: 'Модель с бесплатным доступом', context: '32K', input: 'Free', output: 'Free' };
+  }
+  return { desc: 'Выбранная модель', context: '—', input: '—', output: '—' };
+}
 
 export function initSettings() {
   let _loadMessages = null; // main.js подключит загрузку истории (избегаем циклического импорта)
@@ -14,32 +57,76 @@ export function initSettings() {
   function setLoader(fn) { _loadMessages = fn; }
   function loadMessages() { if (typeof _loadMessages === 'function') _loadMessages(); }
 
-  // --- Auto: без выбора модели и без API-ключа (работает из коробки) ---
-  function updateAutoVisibility() {
-    const auto = $('setProvider').value === 'auto';
-    const modelLabel = $('setModel') && $('setModel').closest('label');
-    const keyLabel = $('setApiKey') && $('setApiKey').closest('label');
-    if (modelLabel) modelLabel.hidden = auto;
-    if (keyLabel) keyLabel.hidden = auto;
+  // --- Обновить карточку провайдера (Cline-style) ---
+  function updateProviderCard(provider) {
+    const info = PROVIDER_INFO[provider] || PROVIDER_INFO.auto;
+    $('providerTitle').textContent = info.title;
+    $('providerDesc').textContent = info.desc;
+
+    const badgesEl = $('providerBadges');
+    badgesEl.innerHTML = '';
+    for (const badge of info.badges) {
+      const span = document.createElement('span');
+      span.className = `badge badge-${badge.type}`;
+      span.textContent = badge.text;
+      badgesEl.appendChild(span);
+    }
+
+    const apiKeyLabel = $('apiKeyLabel');
+    const apiKeyInput = $('setApiKey');
+    const apiKeyHint = $('apiKeyHint');
+    const billingRow = $('billingRow');
+    const subscriptionLink = $('subscriptionLink');
+
+    if (info.needsKey) {
+      if (apiKeyLabel) apiKeyLabel.style.display = '';
+      if (apiKeyInput) apiKeyInput.style.display = '';
+      if (apiKeyHint) apiKeyHint.style.display = '';
+      if (billingRow) billingRow.style.display = '';
+      if (subscriptionLink) {
+        subscriptionLink.style.display = info.signupUrl ? '' : 'none';
+        subscriptionLink.onclick = () => { if (info.signupUrl) window.api.openExternal(info.signupUrl); };
+      }
+    } else {
+      if (apiKeyLabel) apiKeyLabel.style.display = 'none';
+      if (apiKeyInput) apiKeyInput.style.display = 'none';
+      if (apiKeyHint) apiKeyHint.style.display = 'none';
+      if (billingRow) billingRow.style.display = 'none';
+    }
     updateOllamaVisibility();
   }
 
-  // --- Показ/скрытие поля API-ключа для режима поиска ---
-  function updateSearchModeVisibility() {
-    const mode = $('setSearchMode').value;
-    const needsKey = mode === 'tavily' || mode === 'google' || mode === 'brave';
-    const label = $('searchApiKeyLabel');
-    if (label) label.style.display = needsKey ? '' : 'none';
-    // Подсказка для выбранного режима
-    const hint = $('searchApiKeyHint');
-    if (hint) {
-      const hints = {
-        tavily: 'Tavily API Key (1000 запросов/мес бесплатно)',
-        google: 'Google CSE API Key (100 запросов/день бесплатно)',
-        brave: 'Brave Search API Key (2000 запросов/мес бесплатно)',
-      };
-      hint.textContent = hints[mode] || '';
+  // --- Обновить карточку модели (Cline-style) ---
+  function updateModelCard(modelName) {
+    const info = getModelInfo(modelName);
+    $('modelTitle').textContent = modelName;
+    $('modelDesc').textContent = info.desc;
+    $('modelContext').textContent = info.context;
+    $('modelInputPrice').textContent = info.input;
+    $('modelOutputPrice').textContent = info.output;
+
+    const badgesEl = $('modelBadges');
+    badgesEl.innerHTML = '';
+    const isFree = FREE_MODELS.has(modelName) || modelName.endsWith(':free');
+    const provider = $('setProvider').value;
+    const models = MODEL_OPTIONS[provider] || [];
+    if (models[0] === modelName) {
+      const recSpan = document.createElement('span');
+      recSpan.className = 'badge badge-recommended';
+      recSpan.textContent = 'Recommended';
+      badgesEl.appendChild(recSpan);
     }
+    const span = document.createElement('span');
+    span.className = `badge ${isFree ? 'badge-free' : 'badge-paid'}`;
+    span.textContent = isFree ? 'FREE' : 'PAID';
+    badgesEl.appendChild(span);
+  }
+
+  // --- Reasoning Effort ---
+  function updateReasoningEffortUI(value) {
+    const labels = ['Low', 'Medium', 'High-High'];
+    const el = $('reasoningEffortValue');
+    if (el) el.textContent = labels[value] || 'Low';
   }
 
   // --- Менеджер локальных моделей Ollama (виден только для провайдера Ollama) ---
@@ -214,9 +301,9 @@ export function initSettings() {
     $('personalityEditor').value = await window.api.getPersonality();
     $('personalityStatus').textContent = '';
     updatePersonalityCounter();
-    $('setProvider').value = s.provider || 'mistral';
+    $('setProvider').value = s.provider || 'auto';
     updateModelOptions($('setProvider').value, s.model);
-    updateAutoVisibility();
+    updateProviderCard($('setProvider').value);
     // Ключ подставляется per-провайдер: каждый провайдер помнит свой ключ
     _lastSettings = s;
     $('setApiKey').value = (s.providerKeys && s.providerKeys[$('setProvider').value]) || s.apiKey || '';
@@ -255,7 +342,7 @@ export function initSettings() {
 
     // Обновляем список моделей для нового провайдера
     updateModelOptions(newProvider);
-    updateAutoVisibility();
+    updateProviderCard($('setProvider').value);
 
     // Восстанавливаем последнюю выбранную модель для этого провайдера
     const savedModel = s.providerModels && s.providerModels[newProvider];
@@ -270,8 +357,8 @@ export function initSettings() {
     let res;
     try {
       const personalityResult = await window.api.savePersonality($('personalityEditor').value);
-      // Вычисляем reasoningEffort: галочка вкл = "High-High", выкл = "Low"
-      const reasoningEffort = $('setDeepThink').checked ? 'high-high' : 'low';
+      const effortLabels = ['low', 'medium', 'high-high'];
+      const reasoningEffort = effortLabels[parseInt($('reasoningEffortSlider').value)] || 'low';
 
       res = await window.api.saveSettings({
         provider: $('setProvider').value,
@@ -289,7 +376,7 @@ export function initSettings() {
         fontSize: Number($('setFontSize').value),
         // Reasoning Effort вместо deepThink: "low" | "high" | "high-high"
         reasoningEffort: reasoningEffort,
-        deepThink: $('setDeepThink').checked, // для обратной совместимости
+        deepThink: reasoningEffort !== 'low',
         // Сохраняем последнюю модель для каждого провайдера
         providerModels: {
           ...((_lastSettings && _lastSettings.providerModels) || {}),
@@ -297,8 +384,7 @@ export function initSettings() {
         },
         language: $('setLanguage').value,
         plugins: { webSearch: $('setWebSearch').checked, fetchPage: $('setFetchPage').checked },
-      searchMode: $('setSearchMode').value,
-      searchApiKey: $('setSearchApiKey').value
+
       });
       store.state.voiceEnabled = !!res.voiceEnabled; // мгновенно показать/спрятать 🎙
       $('personalityStatus').textContent = personalityResult.warnings.length

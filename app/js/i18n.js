@@ -59,7 +59,27 @@ const T = {
     // Search mode
     'Режим поиска': 'Search mode',
     'Авто (без ключа)': 'Auto (no key)',
-    'Brave Search API': 'Brave Search API'
+    'Brave Search API': 'Brave Search API',
+    // Cline-like API Settings
+    'API Provider': 'API Provider',
+    'Model': 'Model',
+    'Reasoning Effort': 'Reasoning Effort',
+    'API Key': 'API Key',
+    'Context': 'Context',
+    'Input': 'Input',
+    'Output': 'Output',
+    'Recommended': 'Recommended',
+    'Free': 'Free',
+    'Paid': 'Paid',
+    'Local': 'Local',
+    'Free Models': 'Free Models',
+    'Low': 'Low',
+    'Medium': 'Medium',
+    'High-High': 'High-High',
+    'Высокий уровень улучшает глубину мышления, но использует больше токенов.': 'Higher effort improves depth, but uses more tokens.',
+    'Ключ даёт доступ к провайдеру. Модель выбирается отдельно.': 'The key grants access to the provider. The model is chosen separately.',
+    'Попробовать бесплатно →': 'Try for free →',
+    'Подключите провайдера для доступа к моделям': 'Connect a provider to access models',
   }
 };
 
@@ -92,6 +112,26 @@ T.zh = {
   'Спроси что-нибудь…': '输入问题…',
   'Голосовое сообщение: речь → текст (можно отредактировать перед отправкой)': '语音消息：语音 → 文字（发送前可编辑）',
   'Отправить': '发送',
+    // Cline-like API Settings
+    'API Provider': 'API 提供商',
+    'Model': '模型',
+    'Reasoning Effort': '推理努力',
+    'API Key': 'API 密钥',
+    'Context': '上下文',
+    'Input': '输入',
+    'Output': '输出',
+    'Recommended': '推荐',
+    'Free': '免费',
+    'Paid': '付费',
+    'Local': '本地',
+    'Free Models': '免费模型',
+    'Low': '低',
+    'Medium': '中',
+    'High-High': '高-高',
+    'Высокий уровень улучшает глубину мышления, но использует больше токенов.': '更高的努力程度可提高深度，但会消耗更多令牌。',
+    'Ключ даёт доступ к провайдеру. Модель выбирается отдельно.': '密钥用于访问提供商。模型需单独选择。',
+    'Попробовать бесплатно →': '免费试用 →',
+    'Подключите провайдера для доступа к моделям': '连接提供商以访问模型',
     // Ollama model manager
     'Скачанные модели': '已下载的模型',
     'Скачать': '下载',
@@ -105,7 +145,7 @@ T.zh = {
     'Режим поиска': '搜索模式',
     'Авто (без ключа)': '自动（无需密钥）',
     'Brave Search API': 'Brave Search API'
-};
+  };
 
 export const LANG_NAMES = { ru: 'Русский', en: 'English', zh: '中文', de: 'Deutsch', es: 'Español', fr: 'Français' };
 

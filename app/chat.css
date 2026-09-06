@@ -117,3 +117,235 @@ body[data-theme="light"] #personalityEditor:focus { background: rgba(255,255,255
   .settings-actions { right: 0; }
 }
 
+/* ======================== */
+/* Cline-like API Settings  */
+/* ======================== */
+
+/* Provider Card */
+.provider-card {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  transition: border-color 0.2s, background 0.2s;
+}
+.provider-card:hover {
+  border-color: rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.06);
+}
+.provider-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+.provider-card-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #e8e8e8;
+}
+.provider-card-badges {
+  display: flex;
+  gap: 4px;
+}
+.badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  line-height: 1.4;
+}
+.badge-recommended {
+  background: rgba(76, 175, 80, 0.2);
+  color: #81c784;
+  border: 1px solid rgba(76, 175, 80, 0.3);
+}
+.badge-free {
+  background: rgba(33, 150, 243, 0.2);
+  color: #64b5f6;
+  border: 1px solid rgba(33, 150, 243, 0.3);
+}
+.badge-paid {
+  background: rgba(255, 152, 0, 0.2);
+  color: #ffb74d;
+  border: 1px solid rgba(255, 152, 0, 0.3);
+}
+.badge-local {
+  background: rgba(156, 39, 176, 0.2);
+  color: #ce93d8;
+  border: 1px solid rgba(156, 39, 176, 0.3);
+}
+.provider-card-desc {
+  font-size: 11px;
+  color: #888;
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+/* Model Info Bar */
+.model-info-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  font-size: 10px;
+  color: #777;
+}
+.model-info-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.model-info-item .label {
+  color: #555;
+}
+.model-info-item .value {
+  color: #aaa;
+  font-weight: 500;
+}
+
+/* Reasoning Slider */
+.reasoning-slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.reasoning-slider input[type="range"] {
+  flex: 1;
+  accent-color: #6c63ff;
+  height: 4px;
+}
+.reasoning-slider .slider-label {
+  font-size: 10px;
+  color: #666;
+  min-width: 50px;
+}
+.reasoning-slider .slider-value {
+  font-size: 11px;
+  color: #ccc;
+  font-weight: 500;
+  min-width: 65px;
+  text-align: right;
+}
+
+/* Subscription Link */
+.subscription-link {
+  font-size: 11px;
+  color: #64b5f6;
+  text-decoration: none;
+  cursor: pointer;
+}
+.subscription-link:hover {
+  text-decoration: underline;
+}
+
+/* Billing Row */
+.billing-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 6px 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.billing-row span {
+  font-size: 11px;
+  color: #777;
+}
+
+/* Select Inputs */
+.provider-select,
+.model-select {
+  width: 100%;
+  padding: 7px 10px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: #e8e8e8;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s;
+  margin: 4px 0;
+}
+.provider-select:focus,
+.model-select:focus {
+  border-color: #6c63ff;
+}
+.provider-select option,
+.model-select option {
+  background: #1a1a1a;
+  color: #e8e8e8;
+}
+
+/* Section Titles */
+.section-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin: 10px 0 4px;
+}
+
+/* API Key Input */
+.api-key-input {
+  width: 100%;
+  padding: 7px 10px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: #e8e8e8;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s;
+  margin: 4px 0;
+}
+.api-key-input:focus {
+  border-color: #6c63ff;
+}
+
+/* Ollama Manager */
+.ollama-manager {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 6px;
+}
+
+/* API Config Container */
+.api-config {
+  padding: 8px 12px 12px;
+}
+
+/* Light theme overrides for Cline-like components */
+body[data-theme="light"] .provider-card {
+  background: rgba(0,0,0,0.04);
+  border-color: rgba(0,0,0,0.12);
+}
+body[data-theme="light"] .provider-card:hover {
+  background: rgba(0,0,0,0.07);
+  border-color: rgba(0,0,0,0.2);
+}
+body[data-theme="light"] .provider-card-title { color: #202020; }
+body[data-theme="light"] .provider-card-desc { color: #666; }
+body[data-theme="light"] .section-title { color: #888; }
+body[data-theme="light"] .provider-select,
+body[data-theme="light"] .model-select,
+body[data-theme="light"] .api-key-input {
+  background: rgba(255,255,255,0.7);
+  border-color: rgba(0,0,0,0.2);
+  color: #202020;
+}
+body[data-theme="light"] .billing-row { border-bottom-color: rgba(0,0,0,0.08); }
+body[data-theme="light"] .billing-row span { color: #666; }
+body[data-theme="light"] .model-info-bar { border-top-color: rgba(0,0,0,0.06); }
+body[data-theme="light"] .slider-value { color: #444; }
+
