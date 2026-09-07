@@ -4,9 +4,10 @@ import { $, setStatus } from './ui.js';
 import { store } from './store.js';
 
 // Web Speech API — встроено в Chromium/Electron, без загрузки моделей и ключей.
+// Использует Google Speech в фоне — может не работать в некоторых регионах.
 function transcribeWithWebSpeech() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) throw new Error('Распознавание речи не поддерживается');
+  if (!SpeechRecognition) throw new Error('Распознавание речи не поддерживается в этом браузере');
   const recognition = new SpeechRecognition();
   recognition.lang = 'ru-RU';
   recognition.interimResults = false;
@@ -17,10 +18,16 @@ function transcribeWithWebSpeech() {
     recognition.onresult = (e) => { done = true; resolve(e.results[0][0].transcript); };
     recognition.onerror = (e) => {
       if (done) return; done = true;
-      const err = { 'no-speech':'Речь не обнаружена','audio-capture':'Микрофон недоступен','not-allowed':'Доступ к микрофону запрещён','network':'Ошибка сети (возможно, Google заблокирован)','aborted':'Распознавание прервано' };
-      reject(new Error(err[e.error] || 'Ошибка распознавания'));
+      const err = {
+        'no-speech': 'Речь не обнаружена — попробуйте говорить громче',
+        'audio-capture': 'Микрофон недоступен — проверьте разрешения',
+        'not-allowed': 'Доступ к микрофону запрещён — разрешите доступ в настройках',
+        'network': 'Ошибка сети. Google Speech заблокирован в вашем регионе. Решение: используйте бесплатный ключ Groq (получите на console.groq.com) или включите VPN',
+        'aborted': 'Распознавание прервано'
+      };
+      reject(new Error(err[e.error] || 'Ошибка распознавания: ' + e.error));
     };
-    recognition.onend = () => { if (!done) { done = true; reject(new Error('Речь не распознана')); } };
+    recognition.onend = () => { if (!done) { done = true; reject(new Error('Речь не распознана — попробуйте ещё раз')); } };
     recognition.start();
   });
 }
@@ -83,8 +90,23 @@ export function initVoice() {
             if (text) { appendToInput(text); setStatus(''); }
             else setStatus('🎙 Речь не распознана. Попробуй ещё раз.');
           } catch (err) {
-            setStatus('🎙 ' + err.message);
-            setTimeout(() => setStatus(''), 8000);
+            // Облачное распознавание недоступно (сервис/ключ заблокирован, нет сети) —
+            // предлагаем повторить голосом через встроенное распознавание (Web Speech API).
+            if (SpeechRecognition) {
+              setStatus('🎙 Облако недоступно: ' + err.message + ' Говори ещё раз — переключаюсь на встроенное распознавание.');
+              try {
+                const text = await transcribeWithWebSpeech();
+                if (text) { appendToInput(text); setStatus(''); }
+                else setStatus('🎙 Речь не распознана. Попробуй ещё раз.');
+              } catch (err2) {
+                setStatus('🎙 ' + err2.message);
+              } finally {
+                setTimeout(() => setStatus(''), 8000);
+              }
+            } else {
+              setStatus('🎙 ' + err.message);
+              setTimeout(() => setStatus(''), 8000);
+            }
           } finally {
             btnMic.disabled = false;
           }

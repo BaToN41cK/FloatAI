@@ -28,6 +28,10 @@ const { generateTitle } = require('./ai/title');
 // бесплатной модели (HTTP 429, code 1305). Возвратный рост: 2000 → 5000.
 const ZAI_OVERLOAD_RETRY_DELAYS = [2000, 5000];
 
+// Дневной лимит запросов в режиме служебного ключа (Auto). Защищает квоту
+// встроенного ключа от выжигания ботов/скриптами; обычному человеку хватает.
+const BUILTIN_DAILY_LIMIT = 300;
+
 // Автоповтор при сетевых сбоях и временных ошибках серверов (per-hop).
 // Транспортный уровень с теми же RETRY_* живёт в src/ai/transport.js
 // (для компактирования/титула, где нет per-провайдерной обвязки).
@@ -77,7 +81,7 @@ const TOOLS_INSTRUCTION = (plugins, deepThink) => {
   const processHint = deepThink
     ? 'После сбора информации проведи глубокий анализ (см. раздел «Глубокое размышление») и затем дай развёрнутый ответ.'
     : 'Используй найденную информацию для формирования ответа.';
-  return `\n\n## 🌐 Поиск в интернете (активен)\nТебе доступны инструменты: ${parts.join('; ')}.\n- Сначала найди актуальную информацию через web_search, если вопрос касается фактов, новостей, цен, погоды, версий ПО или событий.\n- Если сниппета из поиска мало — открой 1–2 самые подходящие страницы через fetch_page и разбери их содержимое.\n- Не выдумывай ссылки: указывай только те URL, что реально вернули инструменты.\n- В конце ответа добавь блок «📎 Источники» со ссылками на использованные страницы.\n- ${processHint}`;
+  return `\n\n## 🌐 Поиск в интернете (АКТИВЕН — обязательно используй)\n**Для вопросов про цены, новости, погоду, версии — НЕ пытайся ответить из своих знаний: обязательно вызывай web_search.** Тебе доступны инструменты: ${parts.join('; ')}.\nПравила (ВАЖНО, для маленьких моделей):\n1. Вызови web_search ОДИН раз с параметром query — этого почти всегда достаточно.\n2. Получив результат, СРАЗУ дай ответ текстом на его основе. НЕ вызывай инструмент повторно и не зови следующий, если данных хватает.\n3. Если сниппета реально не хватает — открой 1 страницу через fetch_page (url из результата поиска) и ответь.\n4. Не выдумывай ссылки и факты: используй только то, что вернули инструменты. В конце добавь «📎 Источники» с реальными ссылками.\n\nДополнительно: поиск работает и по площадкам — добавляй оператор \`site:\` (\`site:youtube.com канал\`, \`site:twitch.tv ник\`, \`site:reddit.com тема\`). YouTube умеет читаться напрямую через fetch_page (видео, каналы, results?search_query=...).\n- ${processHint}`;
 };
 
 // Глубокое размышление (deepThink) — универсальный режим для ЛЮБЫХ моделей,
@@ -140,6 +144,12 @@ const SUMMARY_MAX = 1200;
 // Бюджет токенов на историю диалога (без личности). Не даём промпту «взорваться»
 // при вставке большого кода/текста — ускоряет ответ и защищает от 400/таймаутов.
 const CONTEXT_BUDGET = 6000;
+
+// Агентный цикл: сколько всего ходов и сколько из них могут вызывать инструменты.
+// MAX_HOPS-TOOL_HOPS_LIMIT ходов в конце — «принудительный ответ текстом»:
+// маленькие модели иногда бесконечно зовут fetch_page и так и не отвечают.
+const MAX_HOPS = 4;
+const TOOL_HOPS_LIMIT = 2; // ходы 0 и 1 — можно вызывать web_search/fetch_page
 
 // Кэш ответов в сессии: повторный точно такой же вопрос за TTL отвечает
 // мгновенно из кэша — экономия токенов и времени (типично: «погода сегодня?»).
@@ -208,16 +218,59 @@ function peekReply(text) {
   return null; // нет подходящей заготовки — не подменяем ответ
 }
 
+// Нужен ли автоматический веб-поиск ДО ответа модели? Маленькие модели плохо
+// вызывают инструменты, поэтому для запросов на актуальные данные поиск лучше
+// запустить самому и вложить результаты в контекст — модель просто прочитает.
+function shouldAutoSearch(text) {
+  const v = String(text || '').trim();
+  if (v.length < 12 || v.length > 600) return false;
+  if (isSimplePrompt(v)) return false;
+  const markers = [
+    // \b в JS работает только с ASCII, поэтому для кириллицы используем Unicode-aware lookbehind (флаг u)
+    /(?<![\p{L}\p{N}])(новост|погод|цен|сколько стоит|стоимост|верси|последн|актуальн|свеж|вышел|вышла|релиз|тренд|рейтинг|топ)/u,
+    /(?<![\p{L}\p{N}])(найди|поищи|погугл|гугл|поиск|кто такой|что такое|что нового|когда|самый лучший|лучшие|как установить|как настроить)/u,
+    /(?<![\p{L}\p{N}])(202[3-9]|203\d|сегодня|сейчас|вчера|этой недел)/u,
+    /(?:^|\s)(?:site|сайте):/i,
+    /^https?:\/\//i
+  ];
+  return markers.some(p => p.test(v));
+}
+
+// Дополнить результаты поиска содержимым 1-2 лучших страниц — модель получает
+// и ссылки, и текст сразу, не будучи обязанной вызывать fetch_page отдельно.
+async function enrichWithPages(results) {
+  const items = (results || []).slice(0, 2);
+  if (!items.length) return '';
+  const ab = new AbortController();
+  const to = setTimeout(() => ab.abort(), 15000);
+  try {
+    const arr = await Promise.all(items.map(async (r) => {
+      try {
+        const text = await fetchPage(r.url, { signal: ab.signal });
+        if (!text) return null;
+        const s = String(text);
+        if (/^Страница не открылась|^Ошибка:|^\(получено через/.test(s)) return null;
+        if (s.length < 120) return null;
+        return `Содержимое страницы «${r.title}»:\\n${s.slice(0, 2500)}`;
+      } catch (_) { return null; }
+    }));
+    return arr.filter(Boolean).join('\\n\\n');
+  } finally { clearTimeout(to); }
+}
+
 // --- Веб-инструменты (tools) для Mistral ---
+// Описания САМОЕ ГЛАВНОЕ для маленьких моделей: они должны понять, что
+// достаточно одного вызова web_search, после чего нужно ответить, а не звать
+// инструменты по кругу.
 const TOOLS = [
   {
     type: 'function',
     function: {
       name: 'web_search',
-      description: 'Поиск в интернете (как поисковик). Возвращает заголовки, ссылки и краткие описания страниц. Используй, когда нужны актуальные данные: цены, новости, погода, existence/названия песен, фильмов, игр и т.п.',
+      description: 'Поисковый запрос в интернете. Используй ОДИН раз с параметром query, когда нужны актуальные данные (цены, новости, погода, версии, названия). После получения результатов СРАЗУ дай ответ на их основе.',
       parameters: {
         type: 'object',
-        properties: { query: { type: 'string', description: 'Поисковый запрос' } },
+        properties: { query: { type: 'string', description: 'Поисковый запрос — что найти' } },
         required: ['query']
       }
     }
@@ -226,7 +279,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'fetch_page',
-      description: 'Скачать текст веб-страницы по URL и вернуть его содержимое (первые ~4000 символов). Используй после web_search, если сниппета не хватило.',
+      description: 'Открыть веб-страницу по URL, если в результатах web_search не хватило деталей. Параметр url — полный адрес из результатов поиска. После получения текста страницы СРАЗУ дай ответ.',
       parameters: {
         type: 'object',
         properties: { url: { type: 'string', description: 'Полный URL страницы (http/https)' } },
@@ -246,13 +299,17 @@ async function runTool(name, argsJson, onStatus, onPermission) {
   try {
     if (name === 'web_search') {
       if (!args.query) return t('web.error.noQuery');
-      if (onStatus) onStatus(`ищу в интернете: ${args.query}`);
+      if (onStatus) onStatus(`🔍 ищу в интернете: ${args.query}`);
       log.info(`[web] поиск: ${args.query}`);
-      return await webSearch(args.query);
+      const found = await webSearch(args.query);
+      // Search+Read в одном шаге: подтягиваем содержимое 1-2 лучших страниц,
+      // чтобы даже маленькая модель отвечала по фактам, не умея fetch_page.
+      const extra = await enrichWithPages(found.results || []);
+      return found.answer + (extra ? '\n\n' + extra : '');
     }
     if (name === 'fetch_page') {
       if (!args.url) return t('web.error.noUrl');
-      if (onStatus) onStatus('открываю страницу из результатов поиска…');
+      if (onStatus) onStatus('📄 открываю страницу из результатов поиска…');
       log.info(`[web] страница: ${args.url}`);
       return await fetchPage(args.url);
     }
@@ -289,6 +346,12 @@ class Client {
     // Язык ответов: ru по умолчанию (как в личности), иначе — принудительная инструкция
     this.language = options.language || 'ru';
     this.abort = null;
+    // Режим служебного ключа (Auto): запросы ходят только на официальные
+    // эндпоинты провайдеров, customEndpoint игнорируется — служебный ключ
+    // нельзя вывести на сторонний сервер подменой endpoint (защита как в Cline:
+    // ключ не покидает доверенные хосты). Плюс дневная квота запросов.
+    this.keyRestricted = options.keyRestricted === true;
+    this.builtinUsage = { date: '', count: 0 };
     // Личность подгружается ОДИН раз при создании клиента (старте приложения)
     // и дальше используется как постоянный system prompt во всех ответах.
     // Не пересобираем её на каждый запрос — и быстрее, и стабильнее.
@@ -305,6 +368,22 @@ class Client {
 
   setApiKey(apiKey) { this.apiKey = String(apiKey || '').trim(); }
   setPlugins(plugins) { this.plugins = plugins || {}; }
+
+  // Включить/выключить режим служебного ключа (см. конструктор)
+  setKeyRestricted(restricted) { this.keyRestricted = restricted === true; }
+  isKeyRestricted() { return !!this.keyRestricted; }
+
+  // Дневная квота служебных запросов: защита квоты встроенного ключа
+  // от выжигания. Счётчик в памяти, обнуляется в начале суток / при рестарте.
+  // Свой ключ пользователя квотой не ограничен.
+  checkBuiltinQuota() {
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.builtinUsage.date !== today) this.builtinUsage = { date: today, count: 0 };
+    if (!this.keyRestricted) { this.builtinUsage.count++; return true; }
+    if (this.builtinUsage.count >= BUILTIN_DAILY_LIMIT) return false;
+    this.builtinUsage.count++;
+    return true;
+  }
 
   // Применить настройки на лету (без пересоздания клиента)
   setOptions(o = {}) {
@@ -414,8 +493,9 @@ class Client {
     if (provider.id === 'gigachat' || provider.id === 'yandex') {
       throw new Error(`${provider.label} требует специальную авторизацию и endpoint; выбери поддерживаемого провайдера или настрой свой OpenAI-совместимый API`);
     }
-    if (provider.id === 'custom' && !this.customEndpoint) {
-      throw new Error('Для своего провайдера укажи endpoint в настройках');
+    if (provider.id === 'custom') {
+      if (this.keyRestricted) throw new Error('Служебный режим Auto не работает со своим endpoint');
+      if (!this.customEndpoint) throw new Error('Для своего провайдера укажи endpoint в настройках');
     }
     const body = {
       model: this.model,
@@ -437,7 +517,10 @@ class Client {
       const allowed = new Set(enabledTools(this.plugins));
       body.tools = TOOLS.filter(tool => allowed.has(tool.function.name));
     }
-    return { url: provider.id === 'custom' ? this.customEndpoint : provider.chatUrl, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` }, body };
+    // Служебный ключ (Auto) — только официальный endpoint провайдера:
+    // кастомный endpoint игнорируется, ключ не уходит на сторонний хост.
+    const requestUrl = (!this.keyRestricted && provider.id === 'custom') ? this.customEndpoint : provider.chatUrl;
+    return { url: requestUrl, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` }, body };
   }
 
   // Компактирование истории: отрезанные сообщения суммаризируются моделью
@@ -492,6 +575,11 @@ class Client {
     const session = this.ensureActive();
     const fast = isSimplePrompt(userMessage);
 
+    // Квота служебного режима Auto: защита встроенного ключа от выжигания
+    if (this.keyRestricted && !this.checkBuiltinQuota()) {
+      throw new Error('Дневной лимит бесплатных Auto-запросов исчерпан. Продолжи завтра или добавь свой API-ключ в настройках');
+    }
+
     // Кэш ответов сессии: тот же вопрос в чистом виде (без учёта регистра/пробелов)
     // за последние REPLY_CACHE_TTL отвечает мгновенно — без запроса к модели.
     const norm = String(userMessage).trim().toLowerCase().replace(/\s+/g, ' ');
@@ -518,13 +606,33 @@ class Client {
       try { this.onPeek(peekReply(userMessage)); } catch (_) {}
     }
 
+    // Автопоиск: для запросов на актуальные данные приложение само ищет в интернете
+    // ДО ответа модели и кладёт результаты в контекст. Тогда даже самая маленькая
+    // модель не обязана уметь вызывать инструменты — достаточно прочитать готовый блок.
+    let autoWebBlock = '';
+    if (!fast && enabledTools(this.plugins).includes('web_search') && shouldAutoSearch(userMessage)) {
+      if (typeof this.onWebStatus === 'function') { try { this.onWebStatus('🔍 автоматически ищу в интернете…'); } catch (_) {} }
+      log.info('[web] автопоиск: ' + String(userMessage).slice(0, 80));
+      try {
+        const found = await webSearch(userMessage);
+        if (found && found.results && found.results.length) {
+          const lines = found.results.slice(0, 6).map((r, i) =>
+            `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join('\n');
+          autoWebBlock = `Результаты веб-поиска по запросу пользователя (получены автоматически, используй их для ответа):\n${lines}`;
+        }
+      } catch (e) {
+        log.warn('[web] автопоиск не удался:', e.message);
+      }
+    }
+
     // Контекст: токен-ограниченная история. Личность — это постоянный system prompt
     // из this.systemPrompt (собран один раз при старте), а не пересобранный под вопрос.
     const historyForPrompt = trimHistory(session.history.slice(-MEMORY_LIMIT), CONTEXT_BUDGET);
 
     const messages = [
       { role: 'system', content: SYSTEM_GUARD_TOP + this.systemPrompt + buildExtraInstructions(this.deepThink, this.maxTokens, this.plugins) + SYSTEM_GUARD_BOTTOM +
-        (session.summary ? `\n\n## Сводка более ранней части этого диалога (кратко):\n${session.summary}` : '')
+        (session.summary ? `\n\n## Сводка более ранней части этого диалога (кратко):\n${session.summary}` : '') +
+        (autoWebBlock ? `\n\n## 🌐 Актуальные данные из интернета (автопоиск)\n${autoWebBlock}` : '')
       },
       ...historyForPrompt,
       { role: 'user', content: userMessage }
@@ -537,9 +645,10 @@ class Client {
     let timedOut = false;    // сработал таймаут запроса (не пользовательская остановка)
     try {
       // Агентный цикл: модель может вызвать инструмент (поиск/страницу),
-      // получить результат и продолжить ответ. Максимум 3 хода.
+      // получить результат и продолжить ответ. Инструменты — максимум первые
+      // TOOL_HOPS_LIMIT ходов; дальше модель ОБЯЗАНА ответить текстом.
       let conversation = messages;
-      for (let hop = 0; hop < 3 && !aborted; hop++) {
+      for (let hop = 0; hop < MAX_HOPS && !aborted; hop++) {
         full = '';
         timedOut = false;
         const pendingTools = new Map(); // index -> {id, name, arguments}
@@ -680,6 +789,24 @@ class Client {
             assistantMsg.tool_calls.push({ id: tc.id || `call_${tc.index}`, type: 'function', function: { name: tc.name, arguments: tc.arguments } });
           }
           conversation = [...conversation, assistantMsg];
+
+          if (hop >= TOOL_HOPS_LIMIT) {
+            // Инструменты больше не выполняем: маленькие модели часто вызывают
+            // fetch_page/web_search по кругу и так и не отвечают. Подкладываем
+            // «исчерпано» и заставляем выдать финальный ответ текстом.
+            for (const call of assistantMsg.tool_calls) {
+              toolResults.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                name: call.function.name,
+                content: 'Результат недоступен: лимит вызовов инструментов исчерпан. Дай финальный ответ текстом на основе уже полученной информации, не вызывай новые инструменты.'
+              });
+            }
+            conversation = [...conversation, ...toolResults];
+            if (hop >= MAX_HOPS - 1) { if (!fullResponse) fullResponse += full; break; }
+            continue;
+          }
+
           for (const call of assistantMsg.tool_calls) {
             const result = await runTool(call.function.name, call.function.arguments, this.onWebStatus, this.onToolPermission);
             toolResults.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: String(result).slice(0, 6000) });
@@ -721,7 +848,8 @@ class Client {
           try {
             const title = await generateTitle(firstMessage, {
               provider: this.provider, model: this.model, apiKey: this.apiKey,
-              endpoint: this.customEndpoint
+              // Служебный ключ: официальный endpoint, без кастомного
+              endpoint: this.keyRestricted ? '' : this.customEndpoint
             });
             if (title && session.title === t('chat.newDialog')) {
               session.title = title;
@@ -769,4 +897,4 @@ class Client {
   }
 }
 
-module.exports = { Client, isSimplePrompt, peekReply, approxTokens, trimHistory, extractReplyText, buildExtraInstructions };
+module.exports = { Client, isSimplePrompt, shouldAutoSearch, peekReply, approxTokens, trimHistory, extractReplyText, buildExtraInstructions };

@@ -190,6 +190,7 @@
             <select id="setProvider" class="provider-select">
               <option value="auto">Auto (готово из коробки)</option>
               <option value="openrouter">OpenRouter</option>
+              <option value="unorouter">UnoRouter</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
               <option value="google">Google</option>
@@ -203,12 +204,6 @@
               <option value="lmstudio">LM Studio (локально)</option>
               <option value="custom">Свой OpenAI-совместимый</option>
             </select>
-
-            <!-- Billing Row -->
-            <div class="billing-row" id="billingRow" style="display:none">
-              <span id="billingText">Подключите провайдера для доступа к моделям</span>
-              <a class="subscription-link" id="subscriptionLink" style="display:none">Попробовать бесплатно →</a>
-            </div>
 
             <!-- API Key -->
             <div class="section-title" id="apiKeyLabel">API Key</div>
@@ -257,14 +252,17 @@
               </div>
             </div>
 
-            <!-- Reasoning Effort -->
-            <div class="section-title">Reasoning Effort</div>
-            <div class="reasoning-slider">
-              <span class="slider-label">Low</span>
-              <input type="range" id="reasoningEffortSlider" min="0" max="2" step="1" value="0" />
-              <span class="slider-value" id="reasoningEffortValue">Low</span>
+            <!-- Reasoning Effort (виден только у моделей с поддержкой) -->
+            <div id="reasoningSection" style="display:none">
+              <div class="section-title">Reasoning Effort</div>
+              <div class="reasoning-slider">
+                <span class="slider-label">Low</span>
+                <input type="range" id="reasoningEffortSlider" min="0" max="2" step="1" value="0" />
+                <span class="slider-label">Medium</span>
+                <span class="slider-value" id="reasoningEffortValue">Low</span>
+                <span class="slider-label">High</span>
+              </div>
             </div>
-            <div class="field-hint" style="margin-top:4px">Высокий уровень улучшает глубину мышления, но использует больше токенов.</div>
 
             <!-- Language -->
             <div class="section-title">Язык интерфейса</div>
@@ -280,47 +278,87 @@
           </div>
         </div>
         <div class="settings-page" data-page="personality">
-          <div class="settings-form">
-          <label>Личность агента (системный промпт)
-            <textarea id="personalityEditor" class="personality-editor" placeholder="Опиши, кем будет являться ассистент и как стоит общаться с тобой..."></textarea>
-            <div class="personality-counter" id="personalityCounter">0 / 5000</div>
-            <small class="field-hint">На каком языке писать, какой стиль общения, в каких ситуациях отказывать.</small>
-          </label>
-          <div style="display:flex; gap:6px; margin-top:6px">
-            <button id="btnPersonalitySave" class="panel-btn">Сохранить</button>
-            <button id="btnPersonalityReset" class="panel-btn">Сбросить</button>
-            <span id="personalityStatus" class="settings-status"></span>
-          </div>
+          <div class="personality-box">
+            <div class="personality-title"><div class="section-title">Своя личность</div><span class="personality-counter" id="personalityCounter">0 / 5000</span></div>
+            <textarea id="personalityEditor" class="personality-editor" placeholder="Опиши, кем будет ассистент: язык, стиль общения, когда отказывать…"></textarea>
+            <div class="personality-toolbar">
+              <button id="btnPersonalityReset" class="panel-btn">Сбросить</button>
+              <span id="personalityStatus" class="settings-status"></span>
+            </div>
           </div>
         </div>
         <div class="settings-page" data-page="appearance">
-        <div class="settings-form">
-        <label>Прозрачность окна
-          <input type="range" id="setOpacity" min="25" max="100" value="100" />
-        </label>
-        <label>Тема
-          <select id="setTheme"><option value="dark">Тёмная</option><option value="light">Светлая</option></select>
-        </label>
-        <label>Размер шрифта
-          <input type="range" id="setFontSize" min="11" max="18" value="13" />
-        </label>
-        </div>
+          <div class="appearance-wrap">
+            <div class="settings-form">
+              <div class="theme-switch-row">
+                <span class="theme-switch-caption">Тема</span>
+                <button type="button" id="themeSwitch" class="theme-switch" role="switch" aria-checked="true">
+                  <span class="theme-switch-track"><span class="theme-switch-icon" id="themeSwitchIcon">🌙</span></span>
+                </button>
+              </div>
+              <label>Прозрачность окна <span class="range-value" id="opacityValue">100%</span>
+                <input type="range" id="setOpacity" min="25" max="100" value="100" />
+              </label>
+              <label>Размер шрифта <span class="range-value" id="fontSizeValue">13px</span>
+                <input type="range" id="setFontSize" min="11" max="18" value="13" />
+              </label>
+              <input type="hidden" id="setTheme" value="dark" />
+            </div>
+            <div class="theme-preview" id="themePreview" aria-hidden="true">
+              <div class="tpv-side">
+                <span class="tpv-dot"></span>
+                <span class="tpv-line"></span>
+                <span class="tpv-line short"></span>
+              </div>
+              <div class="tpv-main">
+                <span class="tpv-bubble user"></span>
+                <span class="tpv-bubble bot"></span>
+                <span class="tpv-input"><span class="tpv-caret"></span></span>
+              </div>
+            </div>
+            <small class="field-hint">Переключатель меняет тёмную и светлую тему. Прозрачность и шрифт применяются сразу.</small>
+          </div>
         </div>
         <div class="settings-page" data-page="diagnostics">
-        <div class="settings-form">
-        <label class="checkbox-row">
-          <input type="checkbox" id="setDebug" /> Расширенная диагностика
-        </label>
-        <button id="btnDiagnostics" class="panel-btn">Скопировать диагностику</button>
-        <button id="btnCheckProvider" class="panel-btn">Проверить провайдера</button>
-        <button id="btnCheckNet" class="panel-btn">Проверить интернет и прокси</button>
-        <button id="btnCheckVoice" class="panel-btn">Проверить голосовой ввод</button>
-        <div id="diagOut" class="field-hint" style="white-space:pre-wrap;grid-column:1/-1"></div>
-        </div>
+          <div class="diag-wrap">
+            <div class="diag-grid">
+              <div class="diag-card" id="diagCardProvider">
+                <div class="diag-dot"></div>
+                <div class="diag-head"><span class="diag-title">Провайдер</span></div>
+                <div class="diag-sub">API-ключ и ответ модели</div>
+                <button id="btnCheckProvider" class="panel-btn diag-btn">Проверить</button>
+              </div>
+              <div class="diag-card" id="diagCardNet">
+                <div class="diag-dot"></div>
+                <div class="diag-head"><span class="diag-title">Интернет и прокси</span></div>
+                <div class="diag-sub">Соединение, прокси и DNS</div>
+                <button id="btnCheckNet" class="panel-btn diag-btn">Проверить</button>
+              </div>
+              <div class="diag-card" id="diagCardVoice">
+                <div class="diag-dot"></div>
+                <div class="diag-head"><span class="diag-title">Голосовой ввод</span></div>
+                <div class="diag-sub">Микрофон и распознавание речи</div>
+                <button id="btnCheckVoice" class="panel-btn diag-btn">Проверить</button>
+              </div>
+            </div>
+            <div id="diagOut" class="diag-out">Нажми «Проверить» — результат появится здесь</div>
+            <label class="checkbox-row diag-debug-row">
+              <input type="checkbox" id="setDebug" /> Расширенная диагностика
+            </label>
+            <button id="btnDiagnostics" class="panel-btn diag-copy">Скопировать диагностику</button>
+          </div>
         </div>
         <div class="settings-page" data-page="advanced">
         <div class="settings-form">
-        <label>Прокси (нужен перезапуск)
+        <label>Режим прокси (обход блокировок, без VPN)
+          <select id="setProxyMode">
+            <option value="builtin">Встроенный прокси (наши серверы)</option>
+            <option value="custom">Свой прокси (Happ/v2rayN)</option>
+            <option value="off">Без прокси</option>
+          </select>
+          <small class="field-hint" id="proxyModeHint"></small>
+        </label>
+        <label id="proxyFieldLabel" style="display:none;">Свой прокси (нужен перезапуск)
           <input type="text" id="setProxy" placeholder="socks5://127.0.0.1:10808 или http://127.0.0.1:10809" />
           <small class="field-hint">Happ/v2rayN: socks5://127.0.0.1:10808 (порт SOCKS) или http://127.0.0.1:10809 (порт HTTP).</small>
         </label>

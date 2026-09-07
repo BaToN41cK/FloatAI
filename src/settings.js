@@ -52,6 +52,9 @@ const DEFAULTS = {
   // Голосовой ввод по умолчанию выключен: включается галочкой в «Прочее»
   voiceEnabled: false,
   proxy: '',
+  // Режим прокси: 'builtin' — встроенный VPN-прокси (Xray, src/proxy/);
+  // 'custom' — свой локальный прокси в поле proxy (Happ/v2rayN); 'off' — без прокси.
+  proxyMode: 'builtin',
   autostart: true,
   blockedSites: '',
   logTtlDays: 7,

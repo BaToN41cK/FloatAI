@@ -89,26 +89,120 @@ body[data-theme="light"] .settings-form textarea { background: rgba(255, 255, 25
 .save-settings { margin-left: auto; font-size: 14px; font-weight: 600; min-width: 128px; }
 .settings-status { color: var(--accent); font-size: 13px; font-weight: 600; }
 
-/* Личность агента — удобный редактор system prompt */
-.personality-editor { display: flex; flex-direction: column; gap: 8px; }
-.personality-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.personality-label { font-size: 12px; color: var(--text); }
-.personality-counter { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Личность агента — компактный редактор */
+.personality-box { display: flex; flex-direction: column; gap: 6px; }
+.personality-title { display: flex; align-items: baseline; justify-content: space-between; }
+.personality-counter { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
 #personalityEditor {
-  height: 320px; min-height: 200px; resize: vertical;
+  height: 132px; min-height: 96px; resize: vertical; width: 100%;
   font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; line-height: 1.45;
   background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 6px;
   padding: 8px; color: #fff; outline: none; tab-size: 2;
 }
 #personalityEditor:focus { border-color: var(--accent); background: rgba(0, 0, 0, 0.55); }
-.personality-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.personality-toolbar { display: flex; align-items: center; gap: 8px; }
+
+/* Диагностика — карточки со статус-индикаторами */
+.diag-wrap { display: flex; flex-direction: column; gap: 10px; }
+.diag-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.diag-card {
+  position: relative; display: flex; flex-direction: column; gap: 3px;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px; padding: 10px 12px;
+  transition: background .15s ease, border-color .15s ease;
+}
+.diag-card:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.2); }
+.diag-head { display: flex; align-items: center; gap: 8px; }
+.diag-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.diag-sub { font-size: 11px; color: var(--muted); margin-left: 2px; }
+.diag-btn { align-self: flex-start; margin: 6px 0 0 2px; padding: 4px 12px; font-size: 12px; }
+.diag-dot {
+  position: absolute; top: 12px; right: 12px; width: 9px; height: 9px; border-radius: 50%;
+  background: rgba(255,255,255,0.25); transition: background .2s ease, box-shadow .2s ease;
+}
+.diag-card.diag-running .diag-dot { background: #e2b93b; animation: diagPulse 0.9s ease-in-out infinite alternate; }
+.diag-card.diag-ok .diag-dot { background: #46c26e; box-shadow: 0 0 6px rgba(70,194,110,0.7); }
+.diag-card.diag-fail .diag-dot { background: #e5484d; box-shadow: 0 0 6px rgba(229,72,77,0.7); }
+@keyframes diagPulse { from { opacity: .35; } to { opacity: 1; } }
+.diag-out {
+  background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+  padding: 8px 10px; font-size: 11.5px; color: var(--muted); white-space: pre-wrap;
+  word-break: break-word; max-height: 150px; overflow-y: auto; min-height: 40px;
+}
+.diag-debug-row { margin-top: 2px; }
+
+/* Тема — переключатель + живое превью */
+.appearance-wrap { display: flex; flex-direction: column; gap: 14px; }
+.theme-switch-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 0;
+}
+.theme-switch-caption { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.theme-switch { background: none; border: none; padding: 0; cursor: pointer; }
+.theme-switch-track {
+  position: relative; display: flex; align-items: center;
+  width: 58px; height: 30px; border-radius: 999px;
+  background: linear-gradient(135deg, #2b3d5c, #4a5f83);
+  border: 1px solid rgba(255,255,255,0.2);
+  transition: background .25s ease, border-color .25s ease;
+}
+.theme-switch.on .theme-switch-track { background: linear-gradient(135deg, #3a3252, #5a4a78); border-color: rgba(255,255,255,0.3); }
+.theme-switch-icon {
+  position: absolute; top: 2px; left: 2px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #f4f0e6; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; line-height: 1;
+  transition: transform .25s cubic-bezier(.4,0,.2,1), background .25s ease;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+}
+.theme-switch.on .theme-switch-icon { transform: translateX(28px); background: #1c2233; }
+.theme-switch:hover .theme-switch-track { border-color: var(--accent); }
+.range-value {
+  float: right; font-size: 12px; font-weight: 700; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+/* Мини-превью окна чата в выбранной теме */
+.theme-preview {
+  display: flex; width: 100%; height: 96px; border-radius: 12px; overflow: hidden;
+  background: #1a1d24; border: 1px solid rgba(255,255,255,0.16);
+  transition: background .25s ease, border-color .25s ease;
+}
+.theme-preview.light { background: #eef0f4; border-color: rgba(0,0,0,0.16); }
+.tpv-side {
+  width: 28%; display: flex; flex-direction: column; gap: 7px; padding: 10px 8px;
+  background: #11141a; border-right: 1px solid rgba(255,255,255,0.08);
+  transition: background .25s ease;
+}
+.theme-preview.light .tpv-side { background: #dfe2e9; border-right-color: rgba(0,0,0,0.08); }
+.tpv-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); opacity: .8; }
+.tpv-line { height: 6px; border-radius: 3px; width: 85%; background: rgba(255,255,255,0.18); }
+.tpv-line.short { width: 55%; }
+.theme-preview.light .tpv-line { background: rgba(0,0,0,0.18); }
+.tpv-main { flex: 1; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
+.tpv-bubble { height: 12px; border-radius: 6px; }
+.tpv-bubble.user { width: 62%; align-self: flex-end; background: rgba(214,179,106,0.75); }
+.tpv-bubble.bot { width: 78%; background: rgba(255,255,255,0.2); }
+.theme-preview.light .tpv-bubble.bot { background: rgba(0,0,0,0.16); }
+.tpv-input {
+  margin-top: auto; height: 18px; border-radius: 9px; width: 100%;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14);
+  display: flex; align-items: center; padding: 0 8px;
+}
+.theme-preview.light .tpv-input { background: rgba(0,0,0,0.05); border-color: rgba(0,0,0,0.14); }
+.tpv-caret { width: 1.5px; height: 9px; background: var(--accent); animation: diagPulse 1s ease-in-out infinite alternate; }
 
 /* Светлая тема */
 body[data-theme="light"] .settings-tab:hover,
 body[data-theme="light"] .settings-tab.active { background: rgba(0,0,0,.08); border-color: rgba(0,0,0,.18); }
-body[data-theme="light"] .personality-label { color: var(--text); }
 body[data-theme="light"] #personalityEditor { background: rgba(255,255,255,0.7); color: var(--text); border-color: rgba(0,0,0,0.3); }
 body[data-theme="light"] #personalityEditor:focus { background: rgba(255,255,255,0.85); }
+body[data-theme="light"] .theme-switch-track { background: linear-gradient(135deg, #93a7c9, #b4c3dd); border-color: rgba(0,0,0,0.2); }
+body[data-theme="light"] .theme-switch.on .theme-switch-track { background: linear-gradient(135deg, #6f5fa8, #9a8cc9); border-color: rgba(0,0,0,0.25); }
+body[data-theme="light"] .theme-switch-icon { background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.25); }
+body[data-theme="light"] .theme-switch.on .theme-switch-icon { background: #2a2440; }
+body[data-theme="light"] .diag-card { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.1); }
+body[data-theme="light"] .diag-card:hover { background: rgba(0,0,0,0.07); border-color: rgba(0,0,0,0.2); }
+body[data-theme="light"] .diag-out { background: rgba(0,0,0,0.05); border-color: rgba(0,0,0,0.12); }
 
 @media (max-width: 560px) {
   .settings-layout { gap: 8px; }
@@ -213,7 +307,7 @@ body[data-theme="light"] #personalityEditor:focus { background: rgba(255,255,255
 .reasoning-slider {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-top: 4px;
 }
 .reasoning-slider input[type="range"] {
@@ -224,39 +318,17 @@ body[data-theme="light"] #personalityEditor:focus { background: rgba(255,255,255
 .reasoning-slider .slider-label {
   font-size: 10px;
   color: #666;
-  min-width: 50px;
+  white-space: nowrap;
 }
 .reasoning-slider .slider-value {
   font-size: 11px;
   color: #ccc;
-  font-weight: 500;
-  min-width: 65px;
-  text-align: right;
-}
-
-/* Subscription Link */
-.subscription-link {
-  font-size: 11px;
-  color: #64b5f6;
-  text-decoration: none;
-  cursor: pointer;
-}
-.subscription-link:hover {
-  text-decoration: underline;
-}
-
-/* Billing Row */
-.billing-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin: 6px 0;
-  padding-bottom: 6px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-}
-.billing-row span {
-  font-size: 11px;
-  color: #777;
+  font-weight: 600;
+  min-width: 60px;
+  text-align: center;
+  padding: 2px 6px;
+  background: rgba(108, 99, 255, 0.15);
+  border-radius: 4px;
 }
 
 /* Select Inputs */

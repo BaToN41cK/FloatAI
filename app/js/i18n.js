@@ -20,6 +20,11 @@ const T = {
     'Получи бесплатно на console.cloud.google.com (100 запросов/день).': 'Get it free at console.cloud.google.com (100 requests/day).',
     'Прозрачность окна': 'Window opacity', 'Размер шрифта': 'Font size',
     'Прокси (нужен перезапуск)': 'Proxy (restart required)',
+    'Режим прокси (обход блокировок, без VPN)': 'Proxy mode (bypass blocks, no VPN)',
+    'Встроенный прокси (наши серверы)': 'Built-in proxy (our servers)',
+    'Свой прокси (Happ/v2rayN)': 'Own proxy (Happ/v2rayN)',
+    'Без прокси': 'No proxy',
+    'Свой прокси (нужен перезапуск)': 'Own proxy (restart required)',
     'Адрес своего AI API (для своего провайдера)': 'Custom AI API endpoint (custom provider)',
     'Чёрный список сайтов (через запятую)': 'Blocked sites (comma-separated)',
     'Глубокое размышление (думает дольше)': 'Deep thinking (takes longer)',
@@ -30,6 +35,14 @@ const T = {
     'Скопировать диагностику': 'Copy diagnostics', 'Сохранить': 'Save', 'Сохранено ✓': 'Saved ✓',
     'Сохранено · прокси после перезапуска': 'Saved · proxy after restart',
     'Диагностика скопирована': 'Diagnostics copied',
+    // Personality presets & diagnostics cards
+    'Быстрые пресеты': 'Quick presets', 'Своя личность': 'Custom personality', 'Сбросить': 'Reset',
+    'Проверить': 'Test', 'Интернет и прокси': 'Internet & proxy', 'Голосовой ввод': 'Voice input',
+    'API-ключ и ответ модели': 'API key and model response',
+    'Соединение, прокси и DNS': 'Connection, proxy and DNS',
+    'Микрофон и распознавание речи': 'Microphone and speech recognition',
+    'Нажми «Проверить» — результат появится здесь': 'Click “Test” — results will appear here',
+    'Пресет применён — нажмите «Сохранить»': 'Preset applied — press “Save”',
     'Тёмная': 'Dark', 'Светлая': 'Light',
     'Сколько токенов модель может потратить на один ответ. Больше = длиннее и подробнее ответ.': 'How many tokens the model may spend on one reply. More = longer and more detailed.',
     'На каком языке показываются подписи и кнопки этого окна.': 'Language of labels and buttons in this window.',
@@ -76,9 +89,8 @@ const T = {
     'Low': 'Low',
     'Medium': 'Medium',
     'High-High': 'High-High',
-    'Высокий уровень улучшает глубину мышления, но использует больше токенов.': 'Higher effort improves depth, but uses more tokens.',
     'Ключ даёт доступ к провайдеру. Модель выбирается отдельно.': 'The key grants access to the provider. The model is chosen separately.',
-    'Попробовать бесплатно →': 'Try for free →',
+    '<b>Low</b> — короткие ответы с нужной информацией. <b>Medium</b> — информативно с пояснениями и уточняющими вопросами. <b>High</b> — максимально продуманный развёрнутый ответ с использованием ИИ-агента из персонализации.': '<b>Low</b> — short answers with needed info. <b>Medium</b> — informative with explanations and clarifying questions. <b>High</b> — maximally thoughtful detailed response using AI agent from personalization.',
     'Подключите провайдера для доступа к моделям': 'Connect a provider to access models',
   }
 };
@@ -103,6 +115,14 @@ T.zh = {
   'Скопировать диагностику': '复制诊断信息', 'Сохранить': '保存', 'Сохранено ✓': '已保存 ✓',
   'Сохранено · прокси после перезапуска': '已保存 · 代理需重启生效',
   'Диагностика скопирована': '诊断信息已复制',
+  // Personality presets & diagnostics cards
+  'Быстрые пресеты': '快速预设', 'Своя личность': '自定义人设', 'Сбросить': '重置',
+  'Проверить': '测试', 'Интернет и прокси': '网络与代理', 'Голосовой ввод': '语音输入',
+  'API-ключ и ответ модели': 'API 密钥与模型响应',
+  'Соединение, прокси и DNS': '连接、代理与 DNS',
+  'Микрофон и распознавание речи': '麦克风与语音识别',
+  'Нажми «Проверить» — результат появится здесь': '点击「测试」后结果会显示在这里',
+  'Пресет применён — нажмите «Сохранить»': '已应用预设 — 请点击「保存」',
   'Тёмная': '深色', 'Светлая': '浅色',
   'Сколько токенов модель может потратить на один ответ. Больше = длиннее и подробнее ответ.': '模型单次回复可使用的令牌数。越多 = 回复越长越详细。',
   'На каком языке показываются подписи и кнопки этого окна.': '此窗口标签和按钮的显示语言。',
@@ -128,9 +148,8 @@ T.zh = {
     'Low': '低',
     'Medium': '中',
     'High-High': '高-高',
-    'Высокий уровень улучшает глубину мышления, но использует больше токенов.': '更高的努力程度可提高深度，但会消耗更多令牌。',
     'Ключ даёт доступ к провайдеру. Модель выбирается отдельно.': '密钥用于访问提供商。模型需单独选择。',
-    'Попробовать бесплатно →': '免费试用 →',
+    '<b>Low</b> — короткие ответы с нужной информацией. <b>Medium</b> — информативно с пояснениями и уточняющими вопросами. <b>High</b> — максимально продуманный развёрнутый ответ с использованием ИИ-агента из персонализации.': '<b>Low</b> — 简短回答包含所需信息。<b>Medium</b> — 信息丰富，附带解释和澄清问题。<b>High</b> — 最周到详细的回答，使用个性化AI代理。',
     'Подключите провайдера для доступа к моделям': '连接提供商以访问模型',
     // Ollama model manager
     'Скачанные модели': '已下载的模型',
@@ -267,8 +286,8 @@ export function applyLang(lang) {
   const dict = lang === 'ru' ? null : T[lang];
   if (lang !== 'ru' && !dict) return;
   // Вкладки, кнопки панелей, заголовки, кнопки ввода
-  document.querySelectorAll('.settings-nav button, .panel-btn, .info-panel > b, #btnMic, #btnSend')
-    .forEach(el => translateText(el, dict));
+  document.querySelectorAll('.settings-nav button, .panel-btn, .info-panel > b, #btnMic, #btnSend, .diag-title, .diag-sub, .section-title')
+    .forEach(el => { if (!el.children.length) translateText(el, dict); });
   // Подписи label: текстовые узлы (captions и тексты чекбоксов)
   document.querySelectorAll('.settings-form label').forEach(label => {
     label.childNodes.forEach(n => { if (n.nodeType === Node.TEXT_NODE && n.textContent.trim()) translateText(n, dict); });

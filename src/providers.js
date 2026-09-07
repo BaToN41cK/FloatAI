@@ -89,6 +89,35 @@ const PROVIDERS = {
     chatUrl: 'https://api.z.ai/api/paas/v4/chat/completions',
     supportsTools: true
   },
+  unorouter: {
+    label: 'UnoRouter',
+    // Единый OpenAI-совместимый шлюз: один ключ — модели разных провайдеров.
+    // Модели с суффиксом :free бесплатны (лёгкий rate-limit на модель).
+    models: [
+      // Бесплатные модели
+      'glm-5.3-flash-think-search:free',
+      'lfm-2.5-2.6b:free',
+      'muse-glimmer-30b:free',
+      'glm-5.2-think-search:free',
+      // Платные модели
+      'claude-fable-5.1',
+      'gpt-6-astra',
+      'deepseek-v4-pro-0813',
+      'deepseek-v4-flash-0731',
+      'gpt-5.6-luna',
+      'claude-sonnet-4.6',
+      'claude-opus-4-6-thinking'
+    ],
+    freeModels: [
+      'glm-5.3-flash-think-search:free',
+      'lfm-2.5-2.6b:free',
+      'muse-glimmer-30b:free',
+      'glm-5.2-think-search:free'
+    ],
+    chatUrl: 'https://api.unorouter.com/v1/chat/completions',
+    supportsTools: true,
+    maxOutputTokens: 8192
+  },
   openrouter: {
     label: 'OpenRouter',
     models: [
@@ -119,8 +148,13 @@ const PROVIDERS = {
   }
 };
 
+// Модели UnoRouter без префикса провайдера, поэтому определяем по точному совпадению
+// (иначе "glm-..." уедет в Z.ai, "claude-..." — в Anthropic, "gpt-..." — в OpenAI)
+const UNOROUTER_MODELS = new Set(PROVIDERS.unorouter.models.map(m => m.toLowerCase()));
+
 function providerForModel(model) {
   const value = String(model || '').toLowerCase();
+  if (UNOROUTER_MODELS.has(value)) return 'unorouter';
   // OpenRouter: формат provider/model (например nvidia/nemotron-3.5-lightning:free)
   if (/^[\w-]+\/[\w-]+(:\w+)?$/.test(value) && !value.startsWith('openai/gpt-4') && !value.startsWith('openai/gpt-3')) return 'openrouter';
   if (value.startsWith('gpt-') || value.startsWith('o1') || value.startsWith('o3')) return 'openai';
@@ -146,8 +180,8 @@ function modelPricing(providerId, model) {
   if (providerId === 'custom') return 'unknown';
   // Cerebras: бесплатный API-тариф на все модели каталога
   if (providerId === 'cerebras') return 'free';
-  // OpenRouter: модели с суффиксом :free бесплатны
-  if (providerId === 'openrouter' && model.endsWith(':free')) return 'free';
+  // OpenRouter и UnoRouter: модели с суффиксом :free бесплатны
+  if ((providerId === 'openrouter' || providerId === 'unorouter') && model.endsWith(':free')) return 'free';
   return 'paid';
 }
 

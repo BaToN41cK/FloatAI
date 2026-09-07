@@ -113,6 +113,13 @@ async function isSafeUrl(rawUrl) {
   } catch (_) { return false; }
 }
 
+// Достать конечный URL из редиректора DuckDuckGo Lite ("//duckduckgo.com/l/?uddg=<target>")
+function extractRedirectUrl(url) {
+  const uddg = /[?&]uddg=([^&]+)/.exec(String(url || ''));
+  if (!uddg) return url;
+  try { return decodeURIComponent(uddg[1]); } catch (_) { return null; }
+}
+
 // --- Поисковые провайдеры ---
 
 // 1. DuckDuckGo (бесплатный, без ключа) — HTML-парсинг
@@ -141,6 +148,30 @@ async function ddgHtmlSearch(query) {
     rawResults.push({ url, title, snippet });
   }
   return rawResults;
+}
+
+// 1b. DuckDuckGo Lite (старый интерфейс) — не капчит там, где основной начал отдавать 202
+async function ddgLiteSearch(query) {
+  const q = encodeURIComponent(String(query).slice(0, 400));
+  const res = await doFetch('https://lite.duckduckgo.com/lite/?q=' + q, {
+    headers: { 'User-Agent': UA, 'Accept-Language': 'ru,en;q=0.8' },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT)
+  });
+  if (!res.ok) throw new Error('DuckDuckGo Lite недоступен (HTTP ' + res.status + ')');
+  const html = await res.text();
+  const rawResults = [];
+  // Каждый результат: <a ... class='result-link'>Title</a> ... <td class='result-snippet'>snippet</td>
+  const blockRegex = /<a[^>]*href="([^"]+)"[^>]*class='result-link'[^>]*>([\s\S]*?)<\/a>[\s\S]*?<td class='result-snippet'>([\s\S]*?)<\/td>/gi;
+  let m;
+  while ((m = blockRegex.exec(html)) !== null) {
+    let url = extractRedirectUrl(decodeEntities(String(m[1] || '').trim()));
+    if (!url) continue;
+    if (!url.startsWith('http') || isBlockedSite(url)) continue;
+    const title = stripTags(m[2] || '').slice(0, 200);
+    const snippet = stripTags(m[3] || '').slice(0, 300);
+    rawResults.push({ url, title, snippet });
+  }
+  return rawResults.slice(0, MAX_SNIPPETS);
 }
 
 // 2. Tavily Search (бесплатный ключ tavily-python, 1000/мес)
@@ -223,19 +254,37 @@ async function braveHtmlSearch(query) {
   return rawResults.slice(0, MAX_SNIPPETS);
 }
 
+// Ключ дедупликации: хост + путь + значимые параметры запроса.
+// YouTube (/watch?v=aaa и ?v=bbb), Twitch и другие площадки дают много ссылок
+// с одного хоста — схлопывать только по hostname нельзя.
+function dedupKey(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, '');
+    const params = [...u.searchParams.entries()]
+      .filter(([k]) => !String(k).toLowerCase().startsWith('utm_'))
+      .map(([k, v]) => String(k).toLowerCase() + '=' + v)
+      .sort()
+      .join('&');
+    return host + u.pathname.replace(/\/$/, '') + (params ? '?' + params : '');
+  } catch (_) { return String(url); }
+}
+
 // Финализация: фильтрация, дедупликация, формирование ответа
 function finalizeSearch(query, rawResults) {
   const seen = new Set();
   const filtered = rawResults.filter(r => {
     if (!r.url || !r.url.startsWith('http') || isBlockedSite(r.url)) return false;
-    try { const u = new URL(r.url); if (seen.has(u.hostname)) return false; seen.add(u.hostname); } catch (_) { return false; }
+    const key = dedupKey(r.url);
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   }).slice(0, MAX_SNIPPETS);
 
   if (!filtered.length) {
     return { query, results: [], answer: t('web.noResults') || 'Ничего не найдено по запросу: ' + query };
   }
-  const sources = filtered.map((r, i) => (i+1) + '. [' + r.title + '](' + r.url + ') \u2014 ' + r.snippet).join('\n')('\n');
+  const sources = filtered.map((r, i) => (i+1) + '. [' + r.title + '](' + r.url + ') \u2014 ' + r.snippet).join('\n');
   const answer = t('web.searchAnswer') || 'Вот что я нашёл:';
   return {
     query,
@@ -259,7 +308,16 @@ async function webSearch(query) {
 
   try {
     if (mode === 'ddg') {
-      rawResults = await ddgHtmlSearch(query);
+      try {
+        rawResults = await ddgHtmlSearch(query);
+      } catch (e) {
+        log.warn('[web] DDG не сработал (' + e.message + ') — пробую Lite');
+      }
+      // Основной html-интерфейс может вернуть анти-бот 202 с пустой выдачей
+      if (!rawResults.length) {
+        try { rawResults = await ddgLiteSearch(query); }
+        catch (e2) { log.warn('[web] DDG Lite тоже не сработал:', e2.message); }
+      }
     } else if (mode === 'tavily') {
       if (!hasKey) throw new Error('нужен ключ Tavily');
       rawResults = await tavilySearch(query);
@@ -293,6 +351,123 @@ async function webSearch(query) {
 }
 
 // Чтение страницы
+
+// --- YouTube: видео, каналы и поиск внутри YouTube ---
+function isYouTubeUrl(u) {
+  try {
+    const h = new URL(u).hostname.replace(/^www\./, '');
+    return h === 'youtube.com' || h === 'm.youtube.com' || h === 'youtu.be' || h === 'music.youtube.com';
+  } catch (_) { return false; }
+}
+
+// Извлечь встроенный JSON (ytInitialData / ytInitialPlayerResponse) из HTML:
+// идём по скобочному балансу с учётом строк — регэкс тут ненадёжен
+function extractEmbeddedJson(html, marker) {
+  const idx = html.indexOf(marker);
+  if (idx === -1) return null;
+  const start = html.indexOf('{', idx);
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < html.length && i - start < 2000000; i++) {
+    const c = html[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+    } else {
+      if (c === '"') inStr = true;
+      else if (c === '{') depth++;
+      else if (c === '}') {
+        depth--;
+        if (depth === 0) { try { return JSON.parse(html.slice(start, i + 1)); } catch (_) { return null; } }
+      }
+    }
+  }
+  return null;
+}
+
+// Собрать все videoRenderer из дерева ytInitialData
+function walkVideoRenderers(node, out, limit) {
+  if (!node || typeof node !== 'object' || out.length >= limit) return;
+  if (Array.isArray(node)) {
+    for (const v of node) { walkVideoRenderers(v, out, limit); if (out.length >= limit) return; }
+    return;
+  }
+  const v = node.videoRenderer;
+  if (v && v.title) {
+    const title = v.title.runs ? v.title.runs.map(r => r.text).join('') : (v.title.simpleText || '');
+    out.push({
+      videoId: v.videoId || '',
+      title: stripTags(title).slice(0, 160),
+      views: (v.viewCountText && v.viewCountText.simpleText) || (v.shortViewCountText && v.shortViewCountText.simpleText) || '',
+      date: (v.publishedTimeText && v.publishedTimeText.simpleText) || '',
+      author: (v.ownerText && v.ownerText.runs && v.ownerText.runs[0] && v.ownerText.runs[0].text) || ''
+    });
+  }
+  for (const k in node) walkVideoRenderers(node[k], out, limit);
+}
+
+async function fetchHtml(url) {
+  const res = await doFetch(url, {
+    headers: { 'User-Agent': UA, 'Accept-Language': 'ru,en;q=0.8' },
+    redirect: 'follow', signal: AbortSignal.timeout(FETCH_TIMEOUT)
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return await res.text();
+}
+
+// Конкретное видео: oEmbed (название/канал) + описание из ytInitialPlayerResponse
+async function youtubeWatch(url) {
+  const parts = [];
+  try {
+    const res = await doFetch('https://www.youtube.com/oembed?url=' + encodeURIComponent(url) + '&format=json', {
+      headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(FETCH_TIMEOUT)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.title) parts.push('Название: ' + data.title);
+      if (data.author_name) parts.push('Канал: ' + data.author_name);
+    }
+  } catch (_) {}
+  try {
+    const html = await fetchHtml(url);
+    const player = extractEmbeddedJson(html, 'ytInitialPlayerResponse');
+    const details = player && player.videoDetails;
+    if (details) {
+      if (details.viewCount) parts.push('Просмотры: ' + details.viewCount);
+      if (details.lengthSeconds) parts.push('Длительность: ~' + Math.round(details.lengthSeconds / 60) + ' мин');
+      if (details.author) parts.push('Канал: ' + details.author);
+      if (details.shortDescription) parts.push('Описание:\n' + String(details.shortDescription).slice(0, 2500));
+    }
+  } catch (_) {}
+  if (!parts.length) throw new Error('не удалось извлечь данные видео');
+  return 'YouTube видео (' + url + ')\n\n' + parts.join('\n\n');
+}
+
+// Канал / результаты поиска внутри YouTube / плейлист: список видео из ytInitialData
+async function youtubeList(url) {
+  const html = await fetchHtml(url);
+  const data = extractEmbeddedJson(html, 'ytInitialData');
+  const videos = [];
+  if (data) walkVideoRenderers(data, videos, 12);
+  if (!videos.length) throw new Error('не удалось извлечь список видео');
+  const lines = videos.map((v, i) =>
+    (i + 1) + '. ' + v.title +
+    (v.author ? ' — ' + v.author : '') +
+    (v.views ? ' · ' + v.views : '') +
+    (v.date ? ' · ' + v.date : '') +
+    (v.videoId ? '\n   https://youtu.be/' + v.videoId : '')
+  );
+  return 'YouTube (' + url + ')\n\n' + lines.join('\n');
+}
+
+async function fetchYouTube(url) {
+  const u = new URL(url);
+  const isWatch = u.hostname.replace(/^www\./, '') === 'youtu.be' ||
+    /^\/watch$/.test(u.pathname) || u.pathname.startsWith('/shorts/');
+  return isWatch ? youtubeWatch(url) : youtubeList(url);
+}
+
 async function fetchViaReader(url) {
   const res = await doFetch('https://r.jina.ai/' + url, {
     headers: { 'User-Agent': UA, 'Accept': 'text/plain' },
@@ -308,6 +483,22 @@ async function fetchViaReader(url) {
 async function fetchPage(url) {
   if (!(await isSafeUrl(url))) return t('web.error.unsafeUrl');
   if (isBlockedSite(url)) return t('web.error.blockedSite');
+
+  // YouTube (видео/каналы/поиск внутри YouTube) — специальный парсинг:
+  // обычная выгрузка даёт JS-болванку, из которой после stripTags ничего не остаётся
+  if (isYouTubeUrl(url)) {
+    try {
+      const yt = await fetchYouTube(url);
+      log.info('[web] YouTube: данные получены (' + new URL(url).hostname + ')');
+      return yt.length > PAGE_LIMIT ? yt.slice(0, PAGE_LIMIT) + '\n…[текст обрезан]' : yt;
+    } catch (e) {
+      log.info('[web] YouTube-парсинг не удался (' + e.message + ') — пробую читалку');
+      try {
+        const yt2 = await fetchViaReader(url);
+        return '(получено через прокси-читалку r.jina.ai)\n\n' + yt2.slice(0, PAGE_LIMIT);
+      } catch (_) { /* ниже — общий путь */ }
+    }
+  }
 
   let text = '';
   let viaReader = false;
@@ -346,4 +537,4 @@ async function fetchPage(url) {
   return prefix + text.slice(0, PAGE_LIMIT) + (text.length > PAGE_LIMIT ? '\n…[текст обрезан]' : '');
 }
 
-module.exports = { webSearch, fetchPage, setBlockedSites, setSearchMode, setSearchApiKey };
+module.exports = { webSearch, fetchPage, setBlockedSites, setSearchMode, setSearchApiKey, finalizeSearch, isYouTubeUrl, extractEmbeddedJson, walkVideoRenderers, extractRedirectUrl };

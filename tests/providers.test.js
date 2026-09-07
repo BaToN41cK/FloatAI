@@ -67,6 +67,20 @@ test('Cohere и Cerebras добавлены в каталог', () => {
   assert.ok(PROVIDERS.cerebras.models.length >= 2);
 });
 
+test('UnoRouter добавлен в каталог', () => {
+  assert.ok(PROVIDERS.unorouter, 'UnoRouter присутствует');
+  assert.match(PROVIDERS.unorouter.chatUrl, /^https:\/\/api\.unorouter\.com\/v1\//);
+  // Модели без префикса провайдера не должны уезжать к Z.ai / Anthropic / OpenAI / Ollama
+  assert.equal(providerForModel('glm-5.3-flash-think-search:free'), 'unorouter');
+  assert.equal(providerForModel('lfm-2.5-2.6b:free'), 'unorouter');
+  assert.equal(providerForModel('claude-opus-4-6-thinking'), 'unorouter');
+  assert.equal(providerForModel('gpt-6-astra'), 'unorouter');
+  assert.equal(providerForModel('deepseek-v4-flash-0731'), 'unorouter');
+  // :free — бесплатно, остальные — платные
+  assert.equal(modelPricing('unorouter', 'muse-glimmer-30b:free'), 'free');
+  assert.equal(modelPricing('unorouter', 'claude-sonnet-4.6'), 'paid');
+});
+
 test('формирует OpenAI-совместимый запрос с инструментами', () => {
   const client = new Client({ provider: 'openai', model: 'gpt-4o-mini', apiKey: 'test-key', deepThink: true });
   const request = client.requestFor([{ role: 'user', content: 'найди новости' }]);

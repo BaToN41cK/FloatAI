@@ -38,6 +38,7 @@ const { getDiagnostics } = require('./src/diagnostics');
 const { isNetworkError, isRateLimitError, friendlyError } = require('./src/ai-errors');
 const { Cooldown } = require('./src/cooldown');
 const secretKeys = require('./src/secret-keys');
+const { enabledTools } = require('./src/plugins');
 
 // --- Защита от EPIPE: если stdout/stderr — «мёртвая труба» (запуск через .vbs со
 // скрытым окном, закрытый терминал, редирект в файл от умершего процесса), любая
@@ -80,6 +81,28 @@ setBlockedSites(loaded.blockedSites);
 setSearchMode(loaded.searchMode || 'ddg');
   setSearchApiKey(loaded.searchApiKey || '');
 log.setLogTtl(loaded.logTtlDays);
+
+// Встроенный VPN-прокси (Xray): свои серверы зашиты обфусцированно в src/proxy/builtin.js.
+// Пользовательский прокси (поле «Прокси») имеет приоритет — он применяется ниже через proxy-server.
+const proxyManager = require('./src/proxy/xray-manager');
+const BUILTIN_PROXY_PORT = 18108; // не 10808/10809 — чтобы не конфликтовать с Happ/v2rayN пользователя
+
+async function applyBuiltinProxy(mode) {
+  if (mode !== 'builtin') {
+    await proxyManager.stop();
+    if (chatWindow) await chatWindow.webContents.session.setProxy({ mode: 'direct' }).catch(() => {});
+    return;
+  }
+  try {
+    const started = await proxyManager.ensureStarted();
+    if (started && chatWindow) {
+      await chatWindow.webContents.session.setProxy({ proxyRules: `socks5://127.0.0.1:${BUILTIN_PROXY_PORT}` });
+    }
+  } catch (e) {
+    log.warn('[proxy] встроенный прокси недоступен:', e.message);
+  }
+}
+
 
 // Поддержка прокси (обход сброса больших запросов провайдером):
 const PROXY = loaded.proxy;
@@ -156,6 +179,8 @@ function createChatWindow() {
     }
   });
   chatWindow.loadFile(path.join(__dirname, 'app', 'chat.html'));
+  // Встроенный прокси: настраиваем сессию окна (socks5 на локальный Xray)
+  applyBuiltinProxy(settings.load().proxyMode).catch(() => {});
   // --- Ссылки не должны «уносить» оверлей-панель на сайт ---
   // target=_blank (window.open) -> системный браузер, панель остаётся чатом.
   chatWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -289,8 +314,20 @@ app.whenReady().then(() => {
   }, onPeek: (text) => {
     // Мгновенный предварительный ответ на простую фразу
     if (text && chatWindow) chatWindow.webContents.send('chat:peek', text);
-  }, onToolPermission: async (name, args) => confirmAction('Разрешить инструмент?', `Модель хочет вызвать инструмент «${name}».\n\n${args.slice(0, 500)}`) });
+  }, onToolPermission: async (name, args) => {
+    // Галочка «Плагин: поиск / чтение страниц» = разрешение инструмента
+    const allowed = enabledTools((settings.load().plugins || {}));
+    if (allowed.includes(name)) {
+      log.info(`[tools] автоподтверждение инструмента «${name}» (плагин включён)`);
+      return true;
+    }
+    return confirmAction('Разрешить инструмент?', `Модель хочет вызвать инструмент «${name}», но он выключен в настройках. Разрешить разово?\n\n${args.slice(0, 500)}`);
+  } });
   mistral.apiKeyFromUser = !autoMode; // false, когда работает служебный ключ Auto-режима
+  // Служебный ключ (Auto): включаем защитный режим — только официальные
+  // endpoints, кастомный endpoint игнорируется, действует дневная квота.
+  // Свой ключ пользователя — режим не нужен, полный функционал.
+  mistral.setKeyRestricted(!mistral.apiKeyFromUser && Boolean(mistral.apiKey));
   createChatWindow();
   chatWindow.show();
   chatWindow.focus();
@@ -496,18 +533,19 @@ async function checkProvider() {
 
 async function checkVoice() {
   const s = settings.load();
-  const entry = { keyConfigured: Boolean(s.voiceApiKey), provider: s.voiceApiKey ? 'Groq Whisper' : (mistral.apiKey ? 'Mistral Voxtral' : null) };
-  if (!s.voiceApiKey && !mistral.apiKey) {
+  const builtinGroq = Boolean(secretKeys.groq());
+  const entry = { keyConfigured: Boolean(s.voiceApiKey) || builtinGroq, builtinKey: builtinGroq, provider: (s.voiceApiKey || builtinGroq) ? 'Groq Whisper' : (mistral.apiKey ? 'Mistral Voxtral' : null) };
+  if (!s.voiceApiKey && !builtinGroq && !mistral.apiKey) {
     lastChecks.voice = entry;
     return '🟡 Голос: нет ни ключа Groq, ни ключа Mistral — распознавание речи работать не будет';
   }
-  const url = s.voiceApiKey ? 'https://api.groq.com' : 'https://api.mistral.ai';
-  const label = s.voiceApiKey ? 'Groq Whisper' : 'Mistral Voxtral';
+  const url = (s.voiceApiKey || builtinGroq) ? 'https://api.groq.com' : 'https://api.mistral.ai';
+  const label = (s.voiceApiKey || builtinGroq) ? 'Groq Whisper' : 'Mistral Voxtral';
   try {
     await doFetch(url, { signal: AbortSignal.timeout(8000) });
     entry.reachable = true;
     lastChecks.voice = entry;
-    return `🟢 Голос: ${label} доступен, ключ задан`;
+    return `🟢 Голос: ${label} доступен${s.voiceApiKey ? ' (ключ пользователя)' : builtinGroq ? ' (служебный ключ)' : ''}`;
   } catch (e) {
     entry.reachable = false; entry.error = e.message;
     lastChecks.voice = entry;
@@ -568,8 +606,10 @@ ipcMain.handle('settings:set', (_e, partial) => {
         mistral.setModel('command-a-03-2025', 'cohere');
         mistral.setApiKey(auto);
         mistral.apiKeyFromUser = false;
+        mistral.setKeyRestricted(true); // служебный ключ: только официальные endpoints + квота
       } else {
         mistral.setModel('qwen2.5:7b', 'auto');
+        mistral.setKeyRestricted(false); // локальный режим — без ограничений
       }
     } else {
       mistral.setModel(saved.model, saved.provider);
@@ -586,10 +626,15 @@ ipcMain.handle('settings:set', (_e, partial) => {
     const perProviderKey = (saved.providerKeys && saved.providerKeys[saved.provider]) || saved.apiKey || '';
     mistral.setApiKey(perProviderKey);
     mistral.apiKeyFromUser = Boolean(perProviderKey);
+    // Свой ключ пользователя — снимаем ограничения служебного режима
+    mistral.setKeyRestricted(false);
   }
   if ('plugins' in (partial || {})) mistral.setPlugins(saved.plugins);
   if ('customEndpoint' in (partial || {})) mistral.customEndpoint = saved.customEndpoint;
   if ('blockedSites' in (partial || {})) setBlockedSites(saved.blockedSites);
+  if ('proxyMode' in (partial || {}) || 'proxy' in (partial || {})) {
+    applyBuiltinProxy(saved.proxyMode).catch(e => log.warn('[proxy] не переключил режим:', e.message));
+  }
   if ('searchMode' in (partial || {})) setSearchMode(partial.searchMode);
     if ('searchApiKey' in (partial || {})) setSearchApiKey(partial.searchApiKey);
   if ('autostart' in (partial || {})) applyAutostart(saved.autostart);
@@ -602,7 +647,8 @@ ipcMain.handle('settings:set', (_e, partial) => {
   const proxyChanged = 'proxy' in (partial || {}) && (partial.proxy || '') !== (loaded.proxy || '');
   return { ...saved, proxyRestartNeeded: proxyChanged };
 });
-ipcMain.handle('app:quit', () => app.quit());
+ipcMain.handle('app:quit', () => { proxyManager.stop(); app.quit(); });
+app.on('before-quit', () => { proxyManager.stop(); });
 
 // --- Авто-скрытие: если окном не пользуются 10 минут — прячем (хоткей \ вернёт) ---
 const IDLE_HIDE_MS = 10 * 60 * 1000;
@@ -734,12 +780,19 @@ ipcMain.handle('voice:transcribe', async (_e, { b64, mime = 'audio/webm' } = {})
     form.append('file', new Blob([audio], { type: mime }), `voice.${ext}`);
 
     let url, headers, label;
+    const builtinGroq = secretKeys.groq();
     if (s.voiceApiKey) {
-      // Бесплатный Whisper через Groq — приоритетный путь
+      // Ключ пользователя — приоритет
       form.append('model', 'whisper-large-v3');
       url = 'https://api.groq.com/openai/v1/audio/transcriptions';
       headers = { 'Authorization': `Bearer ${s.voiceApiKey}` };
       label = 'Whisper (Groq)';
+    } else if (builtinGroq) {
+      // Встроенный служебный ключ Groq — голос работает из коробки, бесплатно
+      form.append('model', 'whisper-large-v3');
+      url = 'https://api.groq.com/openai/v1/audio/transcriptions';
+      headers = { 'Authorization': `Bearer ${builtinGroq}` };
+      label = 'Whisper (Groq, служебный)';
     } else if (mistral.apiKeyFromUser && mistral.provider === 'mistral') {
       // Запасной путь: Voxtral от Mistral — только с НАСТОЯЩИМ ключом Mistral
       // (служебный ключ Auto-режима (Cohere) для Voxtral не подходит — был 401)

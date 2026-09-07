@@ -16,16 +16,31 @@ function isZaiOverload(message) {
   return /1305|访问量过大|当前访问量|access[ _-]?(volume|overflow)|too (many|high) (users|traffic|volume)|traffic currently/i.test(value);
 }
 
+// Региональная блокировка сервиса (Groq, Cohere и др.):
+// Groq отвечает {"error":{"message":"Forbidden"}} без type/code,
+// Cohere/edge — HTML-страницей «403 Forbidden» вместо JSON.
+// Это НЕ проблема тарифа — запрос отклоняется на входе по региону/IP.
+function isRegionBlockedError(message) {
+  const value = String(message || '');
+  if (!value.includes('403')) return false;
+  if (value.includes('tier_not_allowed')) return false;
+  if (/"error"\s*:\s*\{\s*"message"\s*:\s*"Forbidden"\s*\}/.test(value)) return true;
+  if (/<!doctype|<html/i.test(value)) return true;
+  return false;
+}
+
 function friendlyError(message) {
   const value = String(message || '');
   if (value.includes('ERR_PROXY_CONNECTION_FAILED')) return 'Прокси не отвечает — проверь HTTPS_PROXY в настройках';
   if (value.includes('ERR_TUNNEL_CONNECTION_FAILED')) return 'Прокси не смог выйти в интернет — проверь сеть и прокси';
   if (isNetworkError(value)) return 'Нет соединения с интернетом — проверь сеть и попробуй снова';
   if (value.includes('401')) return 'Неверный API-ключ — проверь ключ выбранного провайдера в настройках';
-  if (value.includes('tier_not_allowed') || value.includes('403')) return 'Эта модель недоступна на твоём тарифе — выбери другую модель';
+  if (value.includes('tier_not_allowed')) return 'Эта модель недоступна на твоём тарифе — выбери другую модель';
+  if (isRegionBlockedError(value)) return 'Сервис заблокировал запрос (403) — обычно это региональная блокировка. Включи VPN/прокси или добавь свой API-ключ в настройках';
+  if (value.includes('403')) return 'Эта модель недоступна на твоём тарифе — выбери другую модель';
   if (isZaiOverload(value)) return 'Модель Z.ai сейчас перегружена (лимит бесплатной версии). Подожди немного и попробуй снова или выбери другую бесплатную модель (GLM-4.5-Flash)';
   if (isRateLimitError(value)) return 'Провайдер ограничил запросы. Проверь лимиты и баланс API-ключа';
   return value;
 }
 
-module.exports = { isNetworkError, isRateLimitError, isZaiOverload, friendlyError };
+module.exports = { isNetworkError, isRateLimitError, isZaiOverload, isRegionBlockedError, friendlyError };

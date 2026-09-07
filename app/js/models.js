@@ -13,7 +13,24 @@ export const MODEL_OPTIONS = {
   lmstudio: ['local-model', 'llama-3.2', 'qwen2.5', 'deepseek-r1', 'mistral-small', 'gemma-3'],
   // Auto: выбор модели и ключа не нужен — работает из коробки (служебная Cohere)
   auto: ['command-a-03-2025'],
+  cohere: ['command-a-03-2025', 'command-r-plus-08-2024', 'command-r-08-2024', 'command-r7b-12-2024', 'command-r-03-2024'],
+  cerebras: ['gpt-oss-120b', 'qwen-3.8-27b'],
   zai: ['GLM-5.3-Flash', 'GLM-5.3', 'GLM-5.2', 'GLM-5.1', 'GLM-5', 'GLM-4.7', 'GLM-4.7-FlashX', 'GLM-4.7-Flash', 'GLM-4.5-Flash', 'GLM-4.6V-Flash'],
+  unorouter: [
+    // Бесплатные модели
+    'glm-5.3-flash-think-search:free',
+    'lfm-2.5-2.6b:free',
+    'muse-glimmer-30b:free',
+    'glm-5.2-think-search:free',
+    // Платные модели
+    'claude-fable-5.1',
+    'gpt-6-astra',
+    'deepseek-v4-pro-0813',
+    'deepseek-v4-flash-0731',
+    'gpt-5.6-luna',
+    'claude-sonnet-4.6',
+    'claude-opus-4-6-thinking'
+  ],
   openrouter: [
     'nvidia/nemotron-3.5-lightning:free',
     'poolside/laguna-s-2.1:free',
@@ -38,9 +55,15 @@ export const FREE_MODELS = new Set([
   'qwen2.5:7b', 'llama3.1:8b', 'qwen2.5:3b', 'llama3.2:3b', 'deepseek-r1:8b',
   // Auto (служебная облачная модель — ключ встроен, пользователю не нужен)
   'command-a-03-2025',
+  // Cohere (бесплатный trial-тариф API)
+  'command-r-plus-08-2024', 'command-r-08-2024', 'command-r7b-12-2024', 'command-r-03-2024',
+  // Cerebras (бесплатный API-тариф)
+  'gpt-oss-120b', 'qwen-3.8-27b',
   // OpenRouter бесплатные
   'nvidia/nemotron-3.5-lightning:free', 'poolside/laguna-s-2.1:free', 'inclusionai/ling-3.0-flash-fin:free',
-  'minimax/minimax-m3:free', 'google/gemma-4-31b-it:free'
+  'minimax/minimax-m3:free', 'google/gemma-4-31b-it:free',
+  // UnoRouter бесплатные
+  'glm-5.3-flash-think-search:free', 'lfm-2.5-2.6b:free', 'muse-glimmer-30b:free', 'glm-5.2-think-search:free'
 ]);
 
 export function updateModelOptions(provider, selected) {
@@ -56,8 +79,17 @@ export function updateModelOptions(provider, selected) {
     ? selected : (MODEL_OPTIONS[provider] || MODEL_OPTIONS.mistral)[0];
 }
 
+// Модели UnoRouter без префикса провайдера — определяем по точному совпадению,
+// иначе "glm-..." уедет в Z.ai, "claude-..." — в Anthropic, "gpt-..." — в OpenAI.
+const UNOROUTER_MODELS = new Set([
+  'glm-5.3-flash-think-search:free', 'lfm-2.5-2.6b:free', 'muse-glimmer-30b:free', 'glm-5.2-think-search:free',
+  'claude-fable-5.1', 'gpt-6-astra', 'deepseek-v4-pro-0813', 'deepseek-v4-flash-0731',
+  'gpt-5.6-luna', 'claude-sonnet-4.6', 'claude-opus-4-6-thinking'
+]);
+
 export function detectProvider(model) {
   const value = String(model || '').toLowerCase();
+  if (UNOROUTER_MODELS.has(value)) return 'unorouter';
   // OpenRouter: формат provider/model (например nvidia/nemotron-3.5-lightning:free)
   if (/^[\w-]+\/[\w-]+(:\w+)?$/.test(value) && !value.startsWith('openai/gpt-4') && !value.startsWith('openai/gpt-3')) return 'openrouter';
   if (value.startsWith('gpt-') || value.startsWith('o1') || value.startsWith('o3')) return 'openai';

@@ -9,3 +9,4 @@ try {
 const doFetch = (...args) => _fetch(...args);
 
 module.exports = { doFetch };
+
